@@ -7,7 +7,12 @@ from runtime.models import SessionStatus, TaskStatus
 from runtime.openhands_executor import OpenHandsExecutionResult
 from runtime.openhands_supervisor import OpenHandsSupervisorResult
 from runtime.orchestrator import Orchestrator, OrchestratorConfig
-from runtime.protocol import SupervisorDecision, SupervisorDecisionType
+from runtime.protocol import (
+    SupervisorDecision,
+    SupervisorDecisionType,
+    SupervisorPlan,
+    SupervisorPlanType,
+)
 from runtime.scope import fingerprint_scope
 from runtime.state import StateStore
 
@@ -110,9 +115,15 @@ class FakeExecutorFactory:
 
 
 class FakeSupervisor:
-    def __init__(self, conversation_id: str, decision: SupervisorDecision):
+    def __init__(
+        self,
+        conversation_id: str,
+        decision: SupervisorDecision | None,
+        plan: SupervisorPlan | None,
+    ):
         self._conversation_id = conversation_id
         self.decision = decision
+        self.plan_value = plan
         self.closed = False
 
     @property
@@ -120,10 +131,23 @@ class FakeSupervisor:
         return self._conversation_id
 
     def review(self, prompt: str) -> OpenHandsSupervisorResult:
+        if self.decision is None:
+            raise AssertionError("No fake decision configured for this Supervisor call")
         return OpenHandsSupervisorResult(
             conversation_id=self._conversation_id,
             decision=self.decision,
             raw_response=self.decision.to_json(),
+        )
+
+    def plan(self, prompt: str):
+        from runtime.openhands_supervisor import OpenHandsSupervisorPlanResult
+
+        if self.plan_value is None:
+            raise AssertionError("No fake plan configured for this Supervisor call")
+        return OpenHandsSupervisorPlanResult(
+            conversation_id=self._conversation_id,
+            plan=self.plan_value,
+            raw_response=self.plan_value.to_json(),
         )
 
     def interrupt(self) -> None:
@@ -134,15 +158,21 @@ class FakeSupervisor:
 
 
 class FakeSupervisorFactory:
-    def __init__(self, decisions: list[SupervisorDecision]):
+    def __init__(
+        self,
+        decisions: list[SupervisorDecision],
+        plans: list[SupervisorPlan] | None = None,
+    ):
         self.decisions = decisions
+        self.plans = plans or []
         self.calls: list[str | None] = []
 
     def create(self, *, reviewer_workspace, conversation_id=None):
         self.calls.append(conversation_id)
-        decision = self.decisions.pop(0)
+        decision = self.decisions.pop(0) if self.decisions else None
+        plan = self.plans.pop(0) if self.plans else None
         next_id = conversation_id or f"supervisor-{len(self.calls)}"
-        return FakeSupervisor(next_id, decision)
+        return FakeSupervisor(next_id, decision, plan)
 
 
 def accept_decision() -> SupervisorDecision:
@@ -281,3 +311,52 @@ def test_validation_command_nul_byte_is_rejected():
         pass
     else:
         raise AssertionError("Expected an actual NUL byte to be rejected")
+
+
+def next_task_plan(title: str) -> SupervisorPlan:
+    return SupervisorPlan(
+        action=SupervisorPlanType.NEXT_TASK,
+        title=title,
+        objective=f"Implement {title}.",
+        instructions=f"Implement {title} within the scope.",
+        acceptance_criteria=f"{title} is implemented and validated.",
+        blocking_reason=None,
+    )
+
+
+def done_plan() -> SupervisorPlan:
+    return SupervisorPlan(
+        action=SupervisorPlanType.DONE,
+        title=None,
+        objective=None,
+        instructions=None,
+        acceptance_criteria=None,
+        blocking_reason=None,
+    )
+
+
+def test_orchestrator_runs_full_session_until_supervisor_done(tmp_path):
+    repo, store, artifacts = create_runtime(tmp_path)
+    executor_factory = FakeExecutorFactory(repo, ["first task
+", "second task
+"])
+    supervisor_factory = FakeSupervisorFactory(
+        decisions=[accept_decision(), accept_decision()],
+        plans=[next_task_plan("Second task"), done_plan()],
+    )
+
+    result = Orchestrator(
+        store,
+        artifacts,
+        executor_factory,
+        supervisor_factory,
+        OrchestratorConfig(),
+    ).run_session("session-1")
+
+    assert result.session_status is SessionStatus.DONE
+    assert result.tasks_completed == 2
+    assert store.get_session("session-1").status is SessionStatus.DONE
+    assert [task.status for task in store.list_tasks("session-1")] == [
+        TaskStatus.ACCEPTED,
+        TaskStatus.ACCEPTED,
+    ]
