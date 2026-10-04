@@ -13,6 +13,10 @@ dependencies = []
 dev = [
     "pytest>=8.0",
 ]
+agents = [
+    "openhands-sdk>=1.51,<1.52; python_version >= '3.12'",
+    "openhands-tools>=1.51,<1.52; python_version >= '3.12'",
+]
 
 [tool.setuptools.packages.find]
 include = ["runtime*"]
