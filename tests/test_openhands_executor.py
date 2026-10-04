@@ -4,6 +4,7 @@ from uuid import UUID
 
 import pytest
 
+from runtime.openhands_fallback import OpenHandsLLMFallbackConfig
 from runtime.openhands_executor import (
     OpenHandsAdapterError,
     OpenHandsConversationAdapter,
@@ -212,3 +213,52 @@ def test_missing_optional_dependencies_have_a_clear_error(monkeypatch):
 
     with pytest.raises(OpenHandsAdapterError, match=r"\.\[agents\]"):
         factory.create(workspace_path=Path("."))
+
+
+
+def test_factory_attaches_configured_fallback_strategy(monkeypatch, tmp_path):
+    class FakeProfileStore:
+        def __init__(self, base_dir):
+            self.base_dir = base_dir
+
+        def save(self, name, llm, include_secrets=False):
+            assert include_secrets is True
+
+    class FakeFallbackStrategy:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    sdk = fake_sdk()
+    sdk.update(
+        {
+            "LLMProfileStore": FakeProfileStore,
+            "FallbackStrategy": FakeFallbackStrategy,
+        }
+    )
+    monkeypatch.setattr(
+        OpenHandsExecutorFactory,
+        "_load_sdk",
+        staticmethod(lambda: sdk),
+    )
+
+    factory = OpenHandsExecutorFactory(
+        OpenHandsExecutorConfig(
+            model="gemini/gemini-3.8-flash",
+            api_key="sk-gemini",
+            fallbacks=(
+                OpenHandsLLMFallbackConfig(
+                    model="xai/grok-4.7",
+                    api_key="sk-grok",
+                    base_url="https://api.x.ai/v1",
+                ),
+            ),
+        )
+    )
+
+    factory.create(workspace_path=tmp_path)
+    llm = FakeConversationFactory.created[-1].kwargs["agent"].kwargs["llm"]
+
+    assert isinstance(llm.kwargs["fallback_strategy"], FakeFallbackStrategy)
+    assert llm.kwargs["fallback_strategy"].kwargs["fallback_llms"] == [
+        "executor-fallback-1"
+    ]
