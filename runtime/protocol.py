@@ -299,6 +299,151 @@ class SupervisorPlan:
         return cls.from_dict(decoded)
 
 
+
+
+class SupervisorPlanType(StrEnum):
+    """Allowed actions returned while planning the next task."""
+
+    CREATE_TASK = "CREATE_TASK"
+    DONE = "DONE"
+    BLOCK = "BLOCK"
+
+
+@dataclass(frozen=True, slots=True)
+class SupervisorTaskPlan:
+    """Validated task-planning result returned by the Supervisor."""
+
+    action: SupervisorPlanType
+    title: str | None
+    objective: str | None
+    instructions: str | None
+    acceptance_criteria: str | None
+    blocking_reason: str | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action, SupervisorPlanType):
+            raise ProtocolError("action must be a SupervisorPlanType")
+
+        for value, name in (
+            (self.title, "title"),
+            (self.objective, "objective"),
+            (self.instructions, "instructions"),
+            (self.acceptance_criteria, "acceptance_criteria"),
+            (self.blocking_reason, "blocking_reason"),
+        ):
+            if value is not None:
+                _require_string(value, name)
+
+        if self.action is SupervisorPlanType.CREATE_TASK:
+            required = {
+                "title": self.title,
+                "objective": self.objective,
+                "instructions": self.instructions,
+                "acceptance_criteria": self.acceptance_criteria,
+            }
+            missing = [name for name, value in required.items() if value is None]
+            if missing:
+                raise ProtocolError(
+                    f"CREATE_TASK requires fields: {sorted(missing)}"
+                )
+            if self.blocking_reason is not None:
+                raise ProtocolError("CREATE_TASK must not contain blocking_reason")
+
+        elif self.action is SupervisorPlanType.DONE:
+            if any(
+                value is not None
+                for value in (
+                    self.title,
+                    self.objective,
+                    self.instructions,
+                    self.acceptance_criteria,
+                    self.blocking_reason,
+                )
+            ):
+                raise ProtocolError("DONE must not contain task or blocking fields")
+
+        elif self.action is SupervisorPlanType.BLOCK:
+            if self.blocking_reason is None:
+                raise ProtocolError("BLOCK requires blocking_reason")
+            if any(
+                value is not None
+                for value in (
+                    self.title,
+                    self.objective,
+                    self.instructions,
+                    self.acceptance_criteria,
+                )
+            ):
+                raise ProtocolError("BLOCK must not contain task fields")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "message_type": "supervisor_task_plan",
+            "action": self.action.value,
+            "title": self.title,
+            "objective": self.objective,
+            "instructions": self.instructions,
+            "acceptance_criteria": self.acceptance_criteria,
+            "blocking_reason": self.blocking_reason,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), sort_keys=True)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "SupervisorTaskPlan":
+        data = _require_object(payload, "SupervisorTaskPlan")
+        _require_exact_keys(
+            data,
+            {
+                "schema_version",
+                "message_type",
+                "action",
+                "title",
+                "objective",
+                "instructions",
+                "acceptance_criteria",
+                "blocking_reason",
+            },
+            "SupervisorTaskPlan",
+        )
+        if data["schema_version"] != SCHEMA_VERSION:
+            raise ProtocolError(
+                f"Unsupported SupervisorTaskPlan schema_version: {data['schema_version']!r}"
+            )
+        if data["message_type"] != "supervisor_task_plan":
+            raise ProtocolError("Invalid SupervisorTaskPlan message_type")
+
+        try:
+            action = SupervisorPlanType(data["action"])
+        except ValueError as exc:
+            raise ProtocolError(f"Invalid Supervisor task-plan action: {data['action']!r}") from exc
+
+        optional_strings = {}
+        for name in (
+            "title",
+            "objective",
+            "instructions",
+            "acceptance_criteria",
+            "blocking_reason",
+        ):
+            value = data[name]
+            if value is not None:
+                value = _require_string(value, name)
+            optional_strings[name] = value
+
+        return cls(action=action, **optional_strings)
+
+    @classmethod
+    def from_json(cls, payload: str) -> "SupervisorTaskPlan":
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ProtocolError(f"Invalid SupervisorTaskPlan JSON: {exc}") from exc
+        return cls.from_dict(decoded)
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutorReport:
     """Validated completion report returned by the Executor."""
