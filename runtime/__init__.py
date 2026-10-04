@@ -29,6 +29,16 @@ from runtime.openhands_supervisor import (
     OpenHandsSupervisorResult,
     parse_supervisor_decision,
 )
+from runtime.orchestrator import (
+    ExecutorFactoryLike,
+    ExecutorConversationLike,
+    OrchestrationError,
+    Orchestrator,
+    OrchestratorConfig,
+    SupervisorConversationLike,
+    SupervisorFactoryLike,
+    TaskRunResult,
+)
 from runtime.models import (
     Checkpoint,
     Decision,
@@ -74,6 +84,14 @@ __all__ = [
     "OpenHandsSupervisorError",
     "OpenHandsSupervisorFactory",
     "OpenHandsSupervisorResult",
+    "ExecutorConversationLike",
+    "ExecutorFactoryLike",
+    "OrchestrationError",
+    "Orchestrator",
+    "OrchestratorConfig",
+    "SupervisorConversationLike",
+    "SupervisorFactoryLike",
+    "TaskRunResult",
     "Reconciliation",
     "RecoveryAction",
     "Session",
