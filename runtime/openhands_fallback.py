@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 from typing import Any
 
+# Runtime policy: give a provider a few chances, but fail over quickly enough
+# that transient provider outages do not stall an autonomous development session.
+LLM_RETRY_ATTEMPTS = 3
+LLM_RETRY_WAIT_SECONDS = 60
+LLM_RETRY_MULTIPLIER = 1.0
+
 
 @dataclass(frozen=True, slots=True)
 class OpenHandsLLMFallbackConfig:
@@ -30,7 +36,13 @@ def build_llm_kwargs(
     if not model.strip():
         raise ValueError("OpenHands model must not be empty")
 
-    kwargs: dict[str, Any] = {"model": model}
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "num_retries": LLM_RETRY_ATTEMPTS,
+        "retry_min_wait": LLM_RETRY_WAIT_SECONDS,
+        "retry_max_wait": LLM_RETRY_WAIT_SECONDS,
+        "retry_multiplier": LLM_RETRY_MULTIPLIER,
+    }
     if api_key is not None:
         kwargs["api_key"] = api_key
     if base_url is not None:

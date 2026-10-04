@@ -4,6 +4,9 @@ import pytest
 
 from runtime.openhands_fallback import (
     FallbackProfileManager,
+    LLM_RETRY_ATTEMPTS,
+    LLM_RETRY_MULTIPLIER,
+    LLM_RETRY_WAIT_SECONDS,
     OpenHandsLLMFallbackConfig,
     build_llm_kwargs,
 )
@@ -39,24 +42,33 @@ def fake_sdk():
     }
 
 
-def test_build_llm_kwargs_omits_unset_optional_values():
+def test_build_llm_kwargs_sets_fast_retry_policy():
     assert build_llm_kwargs(
         model="gemini/gemini-3.8-flash",
         api_key=None,
         base_url=None,
-    ) == {"model": "gemini/gemini-3.8-flash"}
+    ) == {
+        "model": "gemini/gemini-3.8-flash",
+        "num_retries": LLM_RETRY_ATTEMPTS,
+        "retry_min_wait": LLM_RETRY_WAIT_SECONDS,
+        "retry_max_wait": LLM_RETRY_WAIT_SECONDS,
+        "retry_multiplier": LLM_RETRY_MULTIPLIER,
+    }
 
 
 def test_build_llm_kwargs_preserves_configured_values():
-    assert build_llm_kwargs(
+    kwargs = build_llm_kwargs(
         model="xai/grok-4.7",
         api_key="sk-dummy",
         base_url="https://api.x.ai/v1",
-    ) == {
-        "model": "xai/grok-4.7",
-        "api_key": "sk-dummy",
-        "base_url": "https://api.x.ai/v1",
-    }
+    )
+
+    assert kwargs["model"] == "xai/grok-4.7"
+    assert kwargs["api_key"] == "sk-dummy"
+    assert kwargs["base_url"] == "https://api.x.ai/v1"
+    assert kwargs["num_retries"] == 3
+    assert kwargs["retry_min_wait"] == 60
+    assert kwargs["retry_max_wait"] == 60
 
 
 def test_fallback_manager_builds_ordered_profiles_without_persisting_to_state(
@@ -87,6 +99,12 @@ def test_fallback_manager_builds_ordered_profiles_without_persisting_to_state(
         "executor-fallback-2",
     ]
     assert all(item[2] is True for item in store.saved)
+    assert all(
+        item[1].kwargs["num_retries"] == LLM_RETRY_ATTEMPTS
+        and item[1].kwargs["retry_min_wait"] == LLM_RETRY_WAIT_SECONDS
+        and item[1].kwargs["retry_max_wait"] == LLM_RETRY_WAIT_SECONDS
+        for item in store.saved
+    )
 
     strategy = manager.strategy()
     assert strategy is not None
