@@ -526,6 +526,37 @@ class StateStore:
             failure_reason=row["failure_reason"],
         )
 
+    def latest_pending_plan(self, session_id: str) -> dict[str, Any] | None:
+        """Return the last planning decision not yet followed by task creation."""
+        events = self.list_events(session_id)
+        last_task_event = -1
+        for index, event in enumerate(events):
+            if event["event_type"] == "TASK_CREATED":
+                last_task_event = index
+        for event in reversed(events[last_task_event + 1:]):
+            if event["event_type"] == "SUPERVISOR_PLANNING_DECISION":
+                return event["payload"]
+            if event["event_type"] in {"SESSION_PLANNING_FAILED", "SESSION_PLANNING_BLOCKED"}:
+                return None
+        return None
+
+    def latest_supervisor_decision(self, iteration_id: str) -> dict[str, Any] | None:
+        """Return the latest persisted Supervisor decision event for an iteration."""
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT payload
+                FROM events
+                WHERE iteration_id = ? AND event_type = ?
+                ORDER BY created_at DESC, event_id DESC
+                LIMIT 1
+                """,
+                (iteration_id, "SUPERVISOR_DECISION"),
+            ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row["payload"])
+
     def list_active_sessions(self) -> list[Session]:
         """Return sessions that may require startup recovery."""
         with self.connection() as connection:
