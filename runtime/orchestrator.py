@@ -755,6 +755,7 @@ class Orchestrator:
             "SUPERVISOR_PLANNING_DECISION",
             {
                 "conversation_id": result.conversation_id,
+                "next_sequence": self.state.next_task_sequence(session_id),
                 "plan": result.plan.to_dict(),
             },
         )
