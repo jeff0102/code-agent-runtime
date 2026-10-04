@@ -244,7 +244,7 @@ def build_planner_context(
         completed_tasks=[
             {
                 "sequence": task.sequence,
-                "title": _bounded_text(task.title, limits or ContextLimits()).strip(),
+                "title": _bounded_text(task.title, 2_000).strip(),
                 "status": task.status.value,
                 "attempt_count": task.attempt_count,
             }
