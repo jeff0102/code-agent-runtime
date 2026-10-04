@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from runtime.artifacts import ArtifactStore
 from runtime.openhands_executor import OpenHandsExecutorConfig, OpenHandsExecutorFactory
+from runtime.openhands_fallback import OpenHandsLLMFallbackConfig
 from runtime.openhands_supervisor import OpenHandsSupervisorConfig, OpenHandsSupervisorFactory
 from runtime.orchestrator import Orchestrator, OrchestratorConfig
 from runtime.scope import fingerprint_scope
@@ -100,6 +101,9 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     validations = tuple(_parse_validation(item) for item in args.validation)
+    executor_fallbacks = _read_fallbacks_from_env("OPENHANDS_EXECUTOR")
+    supervisor_fallbacks = _read_fallbacks_from_env("OPENHANDS_SUPERVISOR")
+
     orchestrator = Orchestrator(
         state=state,
         artifact_store=ArtifactStore(artifact_root),
@@ -108,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
                 model=args.executor_model,
                 api_key=args.executor_api_key,
                 base_url=args.executor_base_url,
+                fallbacks=executor_fallbacks,
                 persistence_dir=state_root / "openhands" / "executor",
             )
         ),
@@ -116,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
                 model=args.supervisor_model,
                 api_key=args.supervisor_api_key,
                 base_url=args.supervisor_base_url,
+                fallbacks=supervisor_fallbacks,
                 persistence_dir=state_root / "openhands" / "supervisor",
             )
         ),
@@ -130,6 +136,42 @@ def main(argv: list[str] | None = None) -> int:
     result = orchestrator.run_session(session.session_id)
     print(json.dumps(_result_dict(result), sort_keys=True, indent=2))
     return 0 if result.session_status.value == "DONE" else 1
+
+
+def _read_fallbacks_from_env(
+    prefix: str,
+) -> tuple[OpenHandsLLMFallbackConfig, ...]:
+    """Read contiguous or sparse numbered fallback configurations from environment."""
+    marker = f"{prefix}_FALLBACK_"
+    suffix = "_MODEL"
+    indices: set[int] = set()
+
+    for key in os.environ:
+        if key.startswith(marker) and key.endswith(suffix):
+            index_text = key[len(marker) : -len(suffix)]
+            if index_text.isdigit():
+                indices.add(int(index_text))
+
+    fallbacks: list[OpenHandsLLMFallbackConfig] = []
+    for index in sorted(indices):
+        model = os.getenv(f"{marker}{index}{suffix}")
+        if model is None:
+            continue
+
+        try:
+            fallbacks.append(
+                OpenHandsLLMFallbackConfig(
+                    model=model,
+                    api_key=os.getenv(f"{marker}{index}_API_KEY"),
+                    base_url=os.getenv(f"{marker}{index}_BASE_URL"),
+                )
+            )
+        except ValueError as exc:
+            raise SystemExit(
+                f"Invalid {marker}{index}{suffix} configuration: {exc}"
+            ) from exc
+
+    return tuple(fallbacks)
 
 
 def _parse_validation(value: str) -> ValidationCommand:
@@ -158,7 +200,6 @@ def _result_dict(result) -> dict[str, object]:
         "session_id": result.session_id,
         "session_status": result.session_status.value,
         "tasks_completed": result.tasks_completed,
-        "failure_reason": result.failure_reason,
         "failure_reason": result.failure_reason,
     }
 
