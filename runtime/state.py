@@ -322,6 +322,74 @@ class StateStore:
         })
         return self.get_task(task_id)
 
+    def list_tasks(self, session_id: str) -> list[Task]:
+        """Return tasks for a session in deterministic sequence order."""
+        self.get_session(session_id)
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM tasks
+                WHERE session_id = ?
+                ORDER BY sequence
+                """,
+                (session_id,),
+            ).fetchall()
+        return [
+            Task(
+                task_id=row["task_id"],
+                session_id=row["session_id"],
+                sequence=row["sequence"],
+                title=row["title"],
+                objective=row["objective"],
+                instructions=row["instructions"],
+                acceptance_criteria=row["acceptance_criteria"],
+                status=TaskStatus(row["status"]),
+                attempt_count=row["attempt_count"],
+                created_at=row["created_at"],
+                completed_at=row["completed_at"],
+            )
+            for row in rows
+        ]
+
+    def next_task_sequence(self, session_id: str) -> int:
+        """Return the next task sequence number for a session."""
+        self.get_session(session_id)
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM tasks WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return int(row["next_sequence"])
+
+    def latest_iteration(self, task_id: str) -> Iteration | None:
+        """Return the most recent iteration for a task."""
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM iterations
+                WHERE task_id = ?
+                ORDER BY attempt_number DESC
+                LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return Iteration(
+            iteration_id=row["iteration_id"],
+            task_id=row["task_id"],
+            attempt_number=row["attempt_number"],
+            executor_conversation_id=row["executor_conversation_id"],
+            supervisor_conversation_id=row["supervisor_conversation_id"],
+            base_commit=row["base_commit"],
+            decision=Decision(row["decision"]),
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+            failure_reason=row["failure_reason"],
+        )
+
     def get_task(self, task_id: str) -> Task:
         with self.connection() as connection:
             row = connection.execute(
