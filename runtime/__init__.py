@@ -1,6 +1,18 @@
 """Core orchestration infrastructure for code-agent-runtime."""
 
 from runtime.artifacts import ArtifactStore
+from runtime.context import (
+    ContextError,
+    ContextLimits,
+    ExecutorContext,
+    GitContext,
+    ScopeContext,
+    SupervisorContext,
+    build_executor_context,
+    build_git_context,
+    build_scope_context,
+    build_supervisor_context,
+)
 from runtime.lease import WorkspaceLease
 from runtime.models import (
     Checkpoint,
@@ -28,9 +40,13 @@ from runtime.workspace import GitWorkspace, WorkspaceError, WorkspaceSnapshot
 __all__ = [
     "ArtifactStore",
     "Checkpoint",
+    "ContextError",
+    "ContextLimits",
+    "ExecutorContext",
     "Decision",
     "ExecutorReport",
     "ExecutorStatus",
+    "GitContext",
     "GitWorkspace",
     "Iteration",
     "Reconciliation",
@@ -42,11 +58,17 @@ __all__ = [
     "StartupRecovery",
     "StartupRecoveryOutcome",
     "StartupRecoveryResult",
+    "SupervisorContext",
+    "ScopeContext",
     "ScopeError",
     "ScopeSnapshot",
     "fingerprint_scope",
     "Task",
     "TaskStatus",
+    "build_executor_context",
+    "build_git_context",
+    "build_scope_context",
+    "build_supervisor_context",
     "ProtocolError",
     "SupervisorDecision",
     "SupervisorDecisionType",
