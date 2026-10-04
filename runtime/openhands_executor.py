@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
+from runtime.openhands_fallback import (
+    FallbackProfileManager,
+    OpenHandsLLMFallbackConfig,
+    build_llm_kwargs,
+)
+
 
 class OpenHandsAdapterError(RuntimeError):
     """Raised when the OpenHands adapter cannot create or control a conversation."""
@@ -36,6 +42,7 @@ class OpenHandsExecutorConfig:
     model: str
     api_key: str | None = None
     base_url: str | None = None
+    fallbacks: tuple[OpenHandsLLMFallbackConfig, ...] = ()
     max_iteration_per_run: int = 500
     persistence_dir: str | Path | None = None
 
@@ -106,6 +113,7 @@ class OpenHandsExecutorFactory:
 
     def __init__(self, config: OpenHandsExecutorConfig) -> None:
         self.config = config
+        self._fallback_profiles: FallbackProfileManager | None = None
 
     def create(
         self,
@@ -121,11 +129,22 @@ class OpenHandsExecutorFactory:
                 f"Executor workspace does not exist: {workspace}"
             )
 
-        llm_kwargs: dict[str, Any] = {"model": self.config.model}
-        if self.config.api_key is not None:
-            llm_kwargs["api_key"] = self.config.api_key
-        if self.config.base_url is not None:
-            llm_kwargs["base_url"] = self.config.base_url
+        if self._fallback_profiles is None and self.config.fallbacks:
+            self._fallback_profiles = FallbackProfileManager(
+                sdk=sdk,
+                fallbacks=self.config.fallbacks,
+                usage_prefix="executor",
+            )
+
+        llm_kwargs = build_llm_kwargs(
+            model=self.config.model,
+            api_key=self.config.api_key,
+            base_url=self.config.base_url,
+        )
+        if self._fallback_profiles is not None:
+            strategy = self._fallback_profiles.strategy()
+            if strategy is not None:
+                llm_kwargs["fallback_strategy"] = strategy
 
         llm = sdk["LLM"](**llm_kwargs)
         agent = sdk["Agent"](
@@ -170,7 +189,14 @@ class OpenHandsExecutorFactory:
     @staticmethod
     def _load_sdk() -> dict[str, Any]:
         try:
-            from openhands.sdk import Agent, Conversation, LLM, Tool
+            from openhands.sdk import (
+                Agent,
+                Conversation,
+                FallbackStrategy,
+                LLM,
+                LLMProfileStore,
+                Tool,
+            )
             from openhands.tools.file_editor import FileEditorTool
             from openhands.tools.terminal import TerminalTool
         except ImportError as exc:
@@ -182,7 +208,9 @@ class OpenHandsExecutorFactory:
         return {
             "Agent": Agent,
             "Conversation": Conversation,
+            "FallbackStrategy": FallbackStrategy,
             "LLM": LLM,
+            "LLMProfileStore": LLMProfileStore,
             "Tool": Tool,
             "FileEditorTool": FileEditorTool,
             "TerminalTool": TerminalTool,
