@@ -390,6 +390,29 @@ class StateStore:
             failure_reason=row["failure_reason"],
         )
 
+    def get_task_by_sequence(self, session_id: str, sequence: int) -> Task | None:
+        """Return a task by session sequence number, if it exists."""
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE session_id = ? AND sequence = ?",
+                (session_id, sequence),
+            ).fetchone()
+        if row is None:
+            return None
+        return Task(
+            task_id=row["task_id"],
+            session_id=row["session_id"],
+            sequence=row["sequence"],
+            title=row["title"],
+            objective=row["objective"],
+            instructions=row["instructions"],
+            acceptance_criteria=row["acceptance_criteria"],
+            status=TaskStatus(row["status"]),
+            attempt_count=row["attempt_count"],
+            created_at=row["created_at"],
+            completed_at=row["completed_at"],
+        )
+
     def get_task(self, task_id: str) -> Task:
         with self.connection() as connection:
             row = connection.execute(
@@ -535,7 +558,14 @@ class StateStore:
                 last_task_event = index
         for event in reversed(events[last_task_event + 1:]):
             if event["event_type"] == "SUPERVISOR_PLANNING_DECISION":
-                return event["payload"]
+                payload = event["payload"]
+                planned_sequence = payload.get("next_sequence")
+                if isinstance(planned_sequence, int) and self.get_task_by_sequence(
+                    session_id,
+                    planned_sequence,
+                ) is not None:
+                    return None
+                return payload
             if event["event_type"] in {"SESSION_PLANNING_FAILED", "SESSION_PLANNING_BLOCKED"}:
                 return None
         return None
