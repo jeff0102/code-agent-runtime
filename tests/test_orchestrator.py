@@ -48,7 +48,7 @@ def init_repository(path: Path) -> None:
     )
 
 
-def create_runtime(tmp_path: Path, *, max_iterations: int = 3):
+def create_runtime(tmp_path: Path, *, max_iterations: int = 3, branch: str = "main"):
     repo = tmp_path / "repo"
     repo.mkdir()
     init_repository(repo)
@@ -57,7 +57,7 @@ def create_runtime(tmp_path: Path, *, max_iterations: int = 3):
     store.create_session(
         repository="owner/repo",
         workspace_path=str(repo),
-        branch="main",
+        branch=branch,
         scope_hash=fingerprint_scope(repo).sha256,
         max_iterations=max_iterations,
         session_id="session-1",
@@ -360,3 +360,27 @@ def test_orchestrator_runs_full_session_until_supervisor_done(tmp_path):
         TaskStatus.ACCEPTED,
         TaskStatus.ACCEPTED,
     ]
+
+
+def test_orchestrator_creates_missing_runtime_branch(tmp_path):
+    repo, store, artifacts = create_runtime(tmp_path, branch="agent/session-1")
+    executor_factory = FakeExecutorFactory(repo, ["accepted\n"])
+    supervisor_factory = FakeSupervisorFactory([accept_decision()])
+
+    result = Orchestrator(
+        store,
+        artifacts,
+        executor_factory,
+        supervisor_factory,
+        OrchestratorConfig(),
+    ).run_task("session-1")
+
+    assert result.task_status is TaskStatus.ACCEPTED
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repo,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    assert branch == "agent/session-1"
