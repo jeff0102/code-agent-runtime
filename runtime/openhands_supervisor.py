@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-from runtime.protocol import ProtocolError, SupervisorDecision, SupervisorPlan
+from runtime.protocol import ProtocolError, SupervisorDecision, SupervisorTaskPlan, SupervisorPlan
 
 
 class OpenHandsSupervisorError(RuntimeError):
@@ -39,6 +39,13 @@ class OpenHandsSupervisorConfig:
 class OpenHandsSupervisorResult:
     conversation_id: str
     decision: SupervisorDecision
+    raw_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class OpenHandsSupervisorPlanResult:
+    conversation_id: str
+    plan: SupervisorTaskPlan
     raw_response: str
 
 
@@ -89,6 +96,28 @@ class OpenHandsSupervisorAdapter:
         except (ProtocolError, ValueError) as exc:
             raise OpenHandsSupervisorError(
                 f"Supervisor returned an invalid plan: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise OpenHandsSupervisorError(
+                f"OpenHands Supervisor planning failed: {exc}"
+            ) from exc
+
+        return OpenHandsSupervisorPlanResult(
+            conversation_id=self.conversation_id,
+            plan=plan,
+            raw_response=raw_response,
+        )
+
+    def plan(self, prompt: str) -> OpenHandsSupervisorPlanResult:
+        if not prompt.strip():
+            raise ValueError("Supervisor planning prompt must not be empty")
+
+        try:
+            raw_response = self._conversation.ask_agent(prompt)
+            plan = parse_supervisor_task_plan(raw_response)
+        except (ProtocolError, ValueError) as exc:
+            raise OpenHandsSupervisorError(
+                f"Supervisor returned an invalid task plan: {exc}"
             ) from exc
         except Exception as exc:
             raise OpenHandsSupervisorError(
@@ -220,3 +249,21 @@ def parse_supervisor_plan(response: str) -> SupervisorPlan:
         ) from exc
 
     return SupervisorPlan.from_dict(payload)
+
+
+def parse_supervisor_task_plan(response: str) -> SupervisorTaskPlan:
+    candidate = response.strip()
+    fence = chr(96) * 3
+    if candidate.startswith(fence) and candidate.endswith(fence):
+        lines = candidate.splitlines()
+        if len(lines) >= 3:
+            candidate = "\n".join(lines[1:-1]).strip()
+
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError as exc:
+        raise ProtocolError(
+            f"Supervisor task plan was not valid JSON: {exc}"
+        ) from exc
+
+    return SupervisorTaskPlan.from_dict(payload)
