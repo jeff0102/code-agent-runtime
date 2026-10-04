@@ -270,7 +270,8 @@ class Orchestrator:
         finalize_session: bool,
     ) -> TaskRunResult:
         session_for_branch = self.state.get_session(session_id)
-        recovery = None
+        if recovery := StartupRecovery(self.state).recover_session(session_id):
+            pass
         if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
             session = self.state.get_session(session_id)
             resolved_task_id = task_id or session.current_task_id
