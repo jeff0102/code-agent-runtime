@@ -1034,6 +1034,7 @@ class Orchestrator:
                 iteration_id=iteration_id,
             )
 
+    @staticmethod
     def _build_executor_report(
         *,
         snapshot,
