@@ -158,7 +158,7 @@ def _result_dict(result) -> dict[str, object]:
         "session_id": result.session_id,
         "session_status": result.session_status.value,
         "tasks_completed": result.tasks_completed,
-        "checkpoint_sha": result.checkpoint_sha,
+        "failure_reason": result.failure_reason,
         "failure_reason": result.failure_reason,
     }
 
