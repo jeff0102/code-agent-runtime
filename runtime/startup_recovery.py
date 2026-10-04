@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from runtime.models import Checkpoint, Iteration, Session, SessionStatus, Task
+from runtime.models import Checkpoint, Decision, Iteration, Session, SessionStatus, Task
 from runtime.recovery import RecoveryAction, Reconciliation, reconcile_workspace
 from runtime.scope import ScopeError, fingerprint_scope
 from runtime.state import StateError, StateStore
@@ -71,8 +71,19 @@ class StartupRecovery:
         task = self.state.get_task(session.current_task_id)
         pending_iteration = self.state.get_pending_iteration(task.task_id)
         latest_checkpoint = self.state.latest_checkpoint(session.session_id)
+        latest_iteration = self.state.latest_iteration(task.task_id)
 
         workspace = GitWorkspace(session.workspace_path)
+
+        repaired = self._repair_checkpoint_boundary(
+            session=session,
+            task=task,
+            latest_iteration=latest_iteration,
+            latest_checkpoint=latest_checkpoint,
+            workspace=workspace,
+        )
+        if repaired is not None:
+            return repaired
 
         if pending_iteration is not None:
             base_commit = pending_iteration.base_commit
@@ -127,6 +138,72 @@ class StartupRecovery:
             )
 
         return self._record_result(session, result)
+
+    def _repair_checkpoint_boundary(
+        self,
+        *,
+        session: Session,
+        task: Task,
+        latest_iteration: Iteration | None,
+        latest_checkpoint: Checkpoint | None,
+        workspace: GitWorkspace,
+    ) -> StartupRecoveryResult | None:
+        """Repair a crash between an accepted checkpoint commit and DB persistence."""
+        if latest_iteration is None:
+            return None
+
+        expected_message = f"runtime-checkpoint:{latest_iteration.iteration_id}"
+        current_message = workspace.commit_message()
+
+        if current_message != expected_message:
+            return None
+        if workspace.status().strip():
+            return self._block(
+                session=session,
+                task=task,
+                iteration=latest_iteration,
+                reason="Checkpoint candidate commit is not clean.",
+            )
+
+        if latest_iteration.decision is not Decision.ACCEPT:
+            try:
+                self.state.complete_iteration(latest_iteration.iteration_id, Decision.ACCEPT)
+            except StateError as exc:
+                return self._block(
+                    session=session,
+                    task=task,
+                    iteration=latest_iteration,
+                    reason=f"Unable to finalize accepted iteration: {exc}",
+                )
+            task = self.state.get_task(task.task_id)
+
+        checkpoint = self.state.checkpoint_for_iteration(latest_iteration.iteration_id)
+        if checkpoint is None:
+            self.state.create_checkpoint(
+                task.task_id,
+                latest_iteration.iteration_id,
+                commit_sha=workspace.current_commit(),
+            )
+        elif checkpoint.commit_sha != workspace.current_commit():
+            return self._block(
+                session=session,
+                task=task,
+                iteration=latest_iteration,
+                reason="Persisted checkpoint SHA does not match checkpoint commit.",
+            )
+
+        repaired_task = self.state.get_task(task.task_id)
+        return self._record_result(
+            session,
+            StartupRecoveryResult(
+                session_id=session.session_id,
+                task_id=task.task_id,
+                iteration_id=latest_iteration.iteration_id,
+                outcome=StartupRecoveryOutcome.ALREADY_CHECKPOINTED,
+                reason="Recovered checkpoint commit persisted before the runtime state.",
+                reconciliation=None,
+            ),
+        )
 
     def recover_active_sessions(self) -> list[StartupRecoveryResult]:
         """Recover all active sessions persisted by the runtime."""
