@@ -314,14 +314,14 @@ class StartupRecovery:
         self.state.set_session_status(session.session_id, SessionStatus.BLOCKED)
         self.state.append_event(
             session.session_id,
-            task.task_id,
+            task.task_id if task else None,
             iteration.iteration_id if iteration else None,
             "SESSION_RECOVERY_BLOCKED",
             {"reason": reason},
         )
         return StartupRecoveryResult(
             session_id=session.session_id,
-            task_id=task.task_id,
+            task_id=task.task_id if task else None,
             iteration_id=iteration.iteration_id if iteration else None,
             outcome=StartupRecoveryOutcome.BLOCKED,
             reason=reason,
