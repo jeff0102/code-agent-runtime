@@ -381,6 +381,23 @@ class Orchestrator:
 
             pending = self.state.get_pending_iteration(task_id)
             if pending is not None:
+                persisted_decision = self.state.latest_supervisor_decision(pending.iteration_id)
+                if persisted_decision is not None:
+                    recovered_decision = SupervisorDecision.from_dict(persisted_decision["decision"])
+                    recovered_result = self._apply_recovered_supervisor_decision(
+                        session=session,
+                        task=task,
+                        iteration=pending,
+                        workspace=workspace,
+                        decision=recovered_decision,
+                        finalize_session=finalize_session,
+                    )
+                    if recovered_decision.decision is SupervisorDecisionType.REVISE:
+                        previous_revision_instructions = list(recovered_decision.instructions)
+                        previous_decision = recovered_decision
+                        recovery_outcome = StartupRecoveryOutcome.READY_FOR_EXECUTION
+                        continue
+                    return recovered_result
                 iteration = pending
                 base_commit = pending.base_commit
                 self.state.append_event(
@@ -764,6 +781,85 @@ class Orchestrator:
             1
             for task in self.state.list_tasks(session_id)
             if task.status is TaskStatus.ACCEPTED
+        )
+
+    def _apply_recovered_supervisor_decision(
+        self,
+        *,
+        session,
+        task,
+        iteration,
+        workspace,
+        decision: SupervisorDecision,
+        finalize_session: bool,
+    ) -> TaskRunResult:
+        """Apply a persisted Supervisor decision after a process interruption."""
+        if decision.decision is SupervisorDecisionType.REVISE:
+            self.state.complete_iteration(
+                iteration.iteration_id,
+                Decision.REVISE,
+            )
+            return TaskRunResult(
+                session_id=session.session_id,
+                task_id=task.task_id,
+                task_status=TaskStatus.REVISION_REQUIRED,
+                session_status=self.state.get_session(session.session_id).status,
+                iterations=task.attempt_count,
+            )
+
+        if decision.decision is SupervisorDecisionType.BLOCK:
+            self.state.complete_iteration(
+                iteration.iteration_id,
+                Decision.BLOCK,
+                failure_reason=decision.blocking_reason,
+            )
+            return TaskRunResult(
+                session_id=session.session_id,
+                task_id=task.task_id,
+                task_status=TaskStatus.BLOCKED,
+                session_status=self.state.get_session(session.session_id).status,
+                iterations=self.state.get_task(task.task_id).attempt_count,
+                failure_reason=decision.blocking_reason,
+            )
+
+        checkpoint = self.state.checkpoint_for_iteration(iteration.iteration_id)
+        if checkpoint is None:
+            if workspace.status().strip():
+                checkpoint_sha = workspace.checkpoint(
+                    f"runtime-checkpoint:{iteration.iteration_id}"
+                )
+            else:
+                checkpoint_sha = workspace.current_commit()
+            self.state.complete_iteration(
+                iteration.iteration_id,
+                Decision.ACCEPT,
+            )
+            self.state.create_checkpoint(
+                task.task_id,
+                iteration.iteration_id,
+                commit_sha=checkpoint_sha,
+            )
+        else:
+            checkpoint_sha = checkpoint.commit_sha
+            if checkpoint_sha != workspace.current_commit():
+                raise OrchestrationError(
+                    "Recovered checkpoint SHA does not match the workspace HEAD."
+                )
+            self.state.complete_iteration(
+                iteration.iteration_id,
+                Decision.ACCEPT,
+            )
+
+        if finalize_session:
+            self.state.set_session_status(session.session_id, SessionStatus.DONE)
+
+        return TaskRunResult(
+            session_id=session.session_id,
+            task_id=task.task_id,
+            task_status=TaskStatus.ACCEPTED,
+            session_status=self.state.get_session(session.session_id).status,
+            iterations=self.state.get_task(task.task_id).attempt_count,
+            checkpoint_sha=checkpoint_sha,
         )
 
     def _prepare_reviewer_workspace(self, session_id: str) -> Path:
