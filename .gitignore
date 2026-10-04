@@ -1,6 +1,18 @@
 # Environment variables containing private API keys
 .env
 
+# Runtime state
+/state/
+/runtime-state/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
 # JetBrains IDE metadata
 .idea/
 
