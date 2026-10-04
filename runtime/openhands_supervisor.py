@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
+from runtime.openhands_fallback import (
+    FallbackProfileManager,
+    OpenHandsLLMFallbackConfig,
+    build_llm_kwargs,
+)
 from runtime.protocol import ProtocolError, SupervisorDecision, SupervisorPlan
 
 
@@ -28,6 +33,7 @@ class OpenHandsSupervisorConfig:
     model: str
     api_key: str | None = None
     base_url: str | None = None
+    fallbacks: tuple[OpenHandsLLMFallbackConfig, ...] = ()
     persistence_dir: str | Path | None = None
 
     def __post_init__(self) -> None:
@@ -81,7 +87,7 @@ class OpenHandsSupervisorAdapter:
 
     def plan(self, prompt: str) -> OpenHandsSupervisorPlanResult:
         if not prompt.strip():
-            raise ValueError("Supervisor planning prompt must not be empty")
+            raise ValueError("Supervisor plan prompt must not be empty")
 
         try:
             raw_response = self._conversation.ask_agent(prompt)
@@ -111,6 +117,7 @@ class OpenHandsSupervisorAdapter:
 class OpenHandsSupervisorFactory:
     def __init__(self, config: OpenHandsSupervisorConfig) -> None:
         self.config = config
+        self._fallback_profiles: FallbackProfileManager | None = None
 
     def create(
         self,
@@ -125,11 +132,22 @@ class OpenHandsSupervisorFactory:
                 f"Supervisor workspace does not exist: {workspace}"
             )
 
-        llm_kwargs: dict[str, Any] = {"model": self.config.model}
-        if self.config.api_key is not None:
-            llm_kwargs["api_key"] = self.config.api_key
-        if self.config.base_url is not None:
-            llm_kwargs["base_url"] = self.config.base_url
+        if self._fallback_profiles is None and self.config.fallbacks:
+            self._fallback_profiles = FallbackProfileManager(
+                sdk=sdk,
+                fallbacks=self.config.fallbacks,
+                usage_prefix="supervisor",
+            )
+
+        llm_kwargs = build_llm_kwargs(
+            model=self.config.model,
+            api_key=self.config.api_key,
+            base_url=self.config.base_url,
+        )
+        if self._fallback_profiles is not None:
+            strategy = self._fallback_profiles.strategy()
+            if strategy is not None:
+                llm_kwargs["fallback_strategy"] = strategy
 
         llm = sdk["LLM"](**llm_kwargs)
         agent = sdk["Agent"](
@@ -166,14 +184,26 @@ class OpenHandsSupervisorFactory:
     @staticmethod
     def _load_sdk() -> dict[str, Any]:
         try:
-            from openhands.sdk import Agent, Conversation, LLM
+            from openhands.sdk import (
+                Agent,
+                Conversation,
+                FallbackStrategy,
+                LLM,
+                LLMProfileStore,
+            )
         except ImportError as exc:
             raise OpenHandsSupervisorError(
                 "OpenHands SDK dependencies are not installed. "
                 'Install with: pip install -e ".[agents]"'
             ) from exc
 
-        return {"Agent": Agent, "Conversation": Conversation, "LLM": LLM}
+        return {
+            "Agent": Agent,
+            "Conversation": Conversation,
+            "FallbackStrategy": FallbackStrategy,
+            "LLM": LLM,
+            "LLMProfileStore": LLMProfileStore,
+        }
 
 
 def _coerce_uuid(value: str | UUID) -> UUID:
@@ -203,7 +233,6 @@ def parse_supervisor_decision(response: str) -> SupervisorDecision:
     return SupervisorDecision.from_dict(payload)
 
 
-
 def parse_supervisor_plan(response: str) -> SupervisorPlan:
     candidate = response.strip()
     fence = chr(96) * 3
@@ -220,39 +249,3 @@ def parse_supervisor_plan(response: str) -> SupervisorPlan:
         ) from exc
 
     return SupervisorPlan.from_dict(payload)
-
-
-def parse_supervisor_plan(response: str) -> SupervisorPlan:
-    candidate = response.strip()
-    fence = chr(96) * 3
-    if candidate.startswith(fence) and candidate.endswith(fence):
-        lines = candidate.splitlines()
-        if len(lines) >= 3:
-            candidate = "\n".join(lines[1:-1]).strip()
-
-    try:
-        payload = json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        raise ProtocolError(
-            f"Supervisor plan response was not valid JSON: {exc}"
-        ) from exc
-
-    return SupervisorPlan.from_dict(payload)
-
-
-def parse_supervisor_task_plan(response: str) -> SupervisorTaskPlan:
-    candidate = response.strip()
-    fence = chr(96) * 3
-    if candidate.startswith(fence) and candidate.endswith(fence):
-        lines = candidate.splitlines()
-        if len(lines) >= 3:
-            candidate = "\n".join(lines[1:-1]).strip()
-
-    try:
-        payload = json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        raise ProtocolError(
-            f"Supervisor task plan was not valid JSON: {exc}"
-        ) from exc
-
-    return SupervisorTaskPlan.from_dict(payload)

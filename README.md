@@ -56,7 +56,6 @@ pytest
 
 The current branch implements the persistent runtime foundation. OpenHands integration and the autonomous Supervisor/Executor loop are separate layers built on top of it.
 
-
 ## Runtime MVP
 
 The runtime can execute a complete session without product-specific code:
@@ -79,17 +78,31 @@ Install the package and OpenHands adapters:
 pip install -e ".[agents]"
 ```
 
-Run a complete autonomous session:
+Run a complete autonomous session with direct provider access through the OpenHands SDK/LiteLLM integration:
 
 ```bash
-code-agent-runtime \\
-  --workspace /path/to/repository \\
-  --executor-model openai/gemini-primary \\
-  --supervisor-model openai/gemini-primary \\
-  --executor-base-url http://localhost:4000/v1 \\
-  --supervisor-base-url http://localhost:4000/v1 \\
+code-agent-runtime \
+  --workspace /path/to/repository \
+  --executor-model gemini/gemini-3.8-flash \
+  --supervisor-model gemini/gemini-3.8-flash \
   --validation tests::python -m pytest
 ```
+
+Fallbacks are configured independently for Executor and Supervisor through numbered environment variables. Any number of fallback slots may be supplied:
+
+```env
+OPENHANDS_EXECUTOR_FALLBACK_1_MODEL=xai/grok-4.7
+OPENHANDS_EXECUTOR_FALLBACK_1_API_KEY=
+OPENHANDS_EXECUTOR_FALLBACK_1_BASE_URL=https://api.x.ai/v1
+
+OPENHANDS_EXECUTOR_FALLBACK_2_MODEL=gemini/gemini-3.7-flash
+OPENHANDS_EXECUTOR_FALLBACK_2_API_KEY=
+OPENHANDS_EXECUTOR_FALLBACK_2_BASE_URL=
+```
+
+The equivalent Supervisor variables use the `OPENHANDS_SUPERVISOR_FALLBACK_<N>_*` prefix.
+
+Fallbacks are tried in order only after the primary model fails with a transient error. Each new model call starts from the primary model again. Fallback credentials are stored only in a temporary OpenHands profile directory and are not written into the runtime state database or artifacts.
 
 The first run creates a persistent session and lets the Supervisor plan the first task. Re-running with `--session-id <id>` resumes the same session.
 
