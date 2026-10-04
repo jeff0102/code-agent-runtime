@@ -138,8 +138,9 @@ class OpenHandsSupervisorFactory:
             persona=(
                 "You are a read-only Supervisor for an autonomous software "
                 "development runtime. Review only supplied evidence. Do not "
-                "modify files. Return exactly one JSON object matching "
-                "SupervisorDecision."
+                "modify files. Follow the prompt's requested protocol exactly: "
+                "return either SupervisorDecision for implementation review "
+                "or SupervisorPlan for task planning."
             ),
         )
 
