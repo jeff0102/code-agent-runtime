@@ -43,6 +43,8 @@ class ExecutorConversationLike(Protocol):
 
     def send_and_run(self, message: str) -> OpenHandsExecutionResult: ...
 
+    def run(self) -> OpenHandsExecutionResult: ...
+
     def interrupt(self) -> None: ...
 
     def close(self) -> None: ...
@@ -465,7 +467,10 @@ class Orchestrator:
                 )
 
                 try:
-                    execution = executor.send_and_run(executor_prompt)
+                    if iteration.executor_conversation_id is not None:
+                        execution = executor.run()
+                    else:
+                        execution = executor.send_and_run(executor_prompt)
                 finally:
                     executor.close()
 
