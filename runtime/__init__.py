@@ -10,6 +10,7 @@ from runtime.context import (
     SupervisorContext,
     build_executor_context,
     build_git_context,
+    build_planner_context,
     build_scope_context,
     build_supervisor_context,
 )
@@ -26,8 +27,11 @@ from runtime.openhands_supervisor import (
     OpenHandsSupervisorConfig,
     OpenHandsSupervisorError,
     OpenHandsSupervisorFactory,
+    OpenHandsSupervisorPlanResult,
+    OpenHandsSupervisorPlanResult,
     OpenHandsSupervisorResult,
     parse_supervisor_decision,
+    parse_supervisor_plan,
 )
 from runtime.orchestrator import (
     ExecutorFactoryLike,
@@ -54,6 +58,8 @@ from runtime.protocol import (
     ProtocolError,
     SupervisorDecision,
     SupervisorDecisionType,
+    SupervisorPlan,
+    SupervisorPlanType,
 )
 from runtime.recovery import RecoveryAction, Reconciliation, reconcile_workspace
 from runtime.scope import ScopeError, ScopeSnapshot, fingerprint_scope
@@ -83,6 +89,7 @@ __all__ = [
     "OpenHandsSupervisorConfig",
     "OpenHandsSupervisorError",
     "OpenHandsSupervisorFactory",
+    "OpenHandsSupervisorPlanResult",
     "OpenHandsSupervisorResult",
     "ExecutorConversationLike",
     "ExecutorFactoryLike",
@@ -91,6 +98,7 @@ __all__ = [
     "OrchestratorConfig",
     "SupervisorConversationLike",
     "SupervisorFactoryLike",
+    "SessionRunResult",
     "TaskRunResult",
     "Reconciliation",
     "RecoveryAction",
@@ -110,11 +118,14 @@ __all__ = [
     "TaskStatus",
     "build_executor_context",
     "build_git_context",
+    "build_planner_context",
     "build_scope_context",
     "build_supervisor_context",
     "ProtocolError",
     "SupervisorDecision",
     "SupervisorDecisionType",
+    "SupervisorPlan",
+    "SupervisorPlanType",
     "WorkspaceError",
     "WorkspaceLease",
     "WorkspaceSnapshot",
@@ -124,5 +135,6 @@ __all__ = [
     "ValidationResult",
     "ValidationRunner",
     "parse_supervisor_decision",
+    "parse_supervisor_plan",
     "reconcile_workspace",
 ]
