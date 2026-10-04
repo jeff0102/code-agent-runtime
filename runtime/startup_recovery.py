@@ -7,6 +7,7 @@ from enum import StrEnum
 
 from runtime.models import Checkpoint, Iteration, Session, SessionStatus, Task
 from runtime.recovery import RecoveryAction, Reconciliation, reconcile_workspace
+from runtime.scope import ScopeError, fingerprint_scope
 from runtime.state import StateError, StateStore
 from runtime.workspace import GitWorkspace, WorkspaceError
 
@@ -39,6 +40,20 @@ class StartupRecovery:
     def recover_session(self, session_id: str) -> StartupRecoveryResult:
         """Recover one session and block it when its workspace is unexpected."""
         session = self.state.get_session(session_id)
+
+        try:
+            current_scope = fingerprint_scope(session.workspace_path)
+        except ScopeError as exc:
+            return self._block_scope(session=session, reason=str(exc))
+
+        if current_scope.sha256 != session.scope_hash:
+            return self._block_scope(
+                session=session,
+                reason=(
+                    "SCOPE.md has changed since the session started: "
+                    f"expected {session.scope_hash}, found {current_scope.sha256}."
+                ),
+            )
 
         if session.current_task_id is None:
             return self._record_result(
@@ -145,6 +160,29 @@ class StartupRecovery:
             return StartupRecoveryOutcome.READY_FOR_EXECUTION
 
         raise StateError(f"Unhandled recovery action: {reconciliation.action.value}")
+
+    def _block_scope(
+        self,
+        *,
+        session: Session,
+        reason: str,
+    ) -> StartupRecoveryResult:
+        self.state.set_session_status(session.session_id, SessionStatus.BLOCKED)
+        self.state.append_event(
+            session.session_id,
+            None,
+            None,
+            "SCOPE_INTEGRITY_VIOLATION",
+            {"reason": reason, "expected_scope_hash": session.scope_hash},
+        )
+        return StartupRecoveryResult(
+            session_id=session.session_id,
+            task_id=session.current_task_id,
+            iteration_id=None,
+            outcome=StartupRecoveryOutcome.BLOCKED,
+            reason=reason,
+            reconciliation=None,
+        )
 
     def _block(
         self,

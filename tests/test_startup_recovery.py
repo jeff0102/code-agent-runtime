@@ -1,6 +1,7 @@
 import subprocess
 
 from runtime.models import Decision, SessionStatus, TaskStatus
+from runtime.scope import fingerprint_scope
 from runtime.startup_recovery import StartupRecovery, StartupRecoveryOutcome
 from runtime.state import StateStore
 from runtime.workspace import GitWorkspace
@@ -24,7 +25,8 @@ def init_repository(path):
         check=True,
     )
     (path / "README.md").write_text("initial\n")
-    subprocess.run(["git", "add", "README.md"], cwd=path, check=True)
+    (path / "SCOPE.md").write_text("# Test scope\n\nBuild the test project.\n")
+    subprocess.run(["git", "add", "README.md", "SCOPE.md"], cwd=path, check=True)
     subprocess.run(
         ["git", "commit", "-m", "initial"],
         cwd=path,
@@ -38,7 +40,7 @@ def create_session_and_task(store, repo, session_id="session-1"):
         repository="owner/repo",
         workspace_path=str(repo),
         branch="main",
-        scope_hash="scope",
+        scope_hash=fingerprint_scope(repo).sha256,
         max_iterations=3,
         session_id=session_id,
     )
@@ -129,3 +131,37 @@ def test_unexpected_workspace_changes_block_session(tmp_path):
 
     events = store.list_events("session-1")
     assert events[-1]["event_type"] == "SESSION_RECOVERY_BLOCKED"
+
+
+
+def test_changed_scope_blocks_session(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repository(repo)
+    store = StateStore(tmp_path / "runtime.db")
+    create_session_and_task(store, repo)
+
+    (repo / "SCOPE.md").write_text("# Changed scope\n")
+
+    result = StartupRecovery(store).recover_session("session-1")
+
+    assert result.outcome == StartupRecoveryOutcome.BLOCKED
+    assert "SCOPE.md has changed" in result.reason
+    assert store.get_session("session-1").status == SessionStatus.BLOCKED
+    assert store.list_events("session-1")[-1]["event_type"] == "SCOPE_INTEGRITY_VIOLATION"
+
+
+def test_missing_scope_blocks_session(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repository(repo)
+    store = StateStore(tmp_path / "runtime.db")
+    create_session_and_task(store, repo)
+
+    (repo / "SCOPE.md").unlink()
+
+    result = StartupRecovery(store).recover_session("session-1")
+
+    assert result.outcome == StartupRecoveryOutcome.BLOCKED
+    assert "scope file not found" in result.reason
+    assert store.get_session("session-1").status == SessionStatus.BLOCKED
