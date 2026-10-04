@@ -492,6 +492,12 @@ class Orchestrator:
                     )
 
                 self._heartbeat(session.workspace_path, session_id)
+                workspace.assert_branch(session.branch)
+                if workspace.current_commit() != base_commit:
+                    raise WorkspaceError(
+                        "Executor must not create commits or rewrite Git history; "
+                        "the runtime owns checkpoint commits."
+                    )
 
                 validation = ValidationRunner(
                     session.workspace_path,
@@ -619,11 +625,42 @@ class Orchestrator:
                 )
                 supervisor.close()
 
-                previous_decision = review.decision
-                if review.decision.decision is SupervisorDecisionType.REVISE:
-                    previous_revision_instructions = list(review.decision.instructions)
+                effective_decision = review.decision
+                gate_reasons: list[str] = []
+                if effective_decision.decision is SupervisorDecisionType.ACCEPT:
+                    if not validation.success:
+                        gate_reasons.append(
+                            "Required deterministic validation did not pass."
+                        )
+                    if executor_report.status is not ExecutorStatus.COMPLETED:
+                        gate_reasons.append(
+                            "Executor did not report a completed execution state."
+                        )
+                if gate_reasons:
+                    effective_decision = SupervisorDecision(
+                        decision=SupervisorDecisionType.REVISE,
+                        task_complete=False,
+                        instructions=gate_reasons,
+                        blocking_reason=None,
+                    )
+                    self.state.append_event(
+                        session_id,
+                        task_id,
+                        iteration.iteration_id,
+                        "SUPERVISOR_ACCEPT_REJECTED_RUNTIME_GATE",
+                        {
+                            "original_decision": review.decision.to_dict(),
+                            "reasons": gate_reasons,
+                        },
+                    )
 
-                decision = Decision(review.decision.decision.value)
+                previous_decision = effective_decision
+                if effective_decision.decision is SupervisorDecisionType.REVISE:
+                    previous_revision_instructions = list(
+                        effective_decision.instructions
+                    )
+
+                decision = Decision(effective_decision.decision.value)
 
                 self._heartbeat(session.workspace_path, session_id)
 
