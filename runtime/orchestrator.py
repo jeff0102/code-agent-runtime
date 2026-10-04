@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -23,7 +21,7 @@ from runtime.openhands_supervisor import OpenHandsSupervisorResult
 from runtime.protocol import ExecutorReport, ExecutorStatus, SupervisorDecisionType
 from runtime.startup_recovery import StartupRecovery, StartupRecoveryOutcome
 from runtime.state import StateError, StateStore
-from runtime.validation import ValidationCommand, ValidationRunner
+from runtime.validation import ValidationCommand, ValidationResult, ValidationRunner
 from runtime.workspace import GitWorkspace, WorkspaceError
 
 
@@ -295,7 +293,11 @@ class Orchestrator:
                     {"conversation_id": executor.conversation_id},
                 )
 
-                execution = executor.send_and_run(executor_prompt)
+                try:
+                    execution = executor.send_and_run(executor_prompt)
+                finally:
+                    executor.close()
+
                 self.state.set_iteration_conversations(
                     iteration.iteration_id,
                     execution.conversation_id,
@@ -312,7 +314,6 @@ class Orchestrator:
                         "error": execution.error,
                     },
                 )
-                executor.close()
 
                 if execution.error is not None:
                     return self._fail_iteration(
@@ -476,7 +477,7 @@ class Orchestrator:
                         task_id=task_id,
                         task_status=TaskStatus.ACCEPTED,
                         session_status=SessionStatus.DONE,
-                        iterations=task.attempt_count + 1,
+                        iterations=self.state.get_task(task_id).attempt_count,
                         checkpoint_sha=checkpoint_sha,
                     )
 
@@ -486,7 +487,7 @@ class Orchestrator:
                         task_id=task_id,
                         task_status=TaskStatus.BLOCKED,
                         session_status=self.state.get_session(session_id).status,
-                        iterations=task.attempt_count + 1,
+                        iterations=self.state.get_task(task_id).attempt_count,
                         failure_reason=review.decision.blocking_reason,
                     )
 
@@ -630,7 +631,7 @@ class Orchestrator:
         )
 
     @staticmethod
-    def _validation_summary(validation) -> str:
+    def _validation_summary(validation: ValidationResult) -> str:
         if not validation.commands:
             return "No validation commands configured."
         parts = []
@@ -657,12 +658,16 @@ class Orchestrator:
         ]
         blockers: list[str] = []
         status = ExecutorStatus.COMPLETED
-        if execution_status.upper() in {"BLOCKED", "FAILED"}:
-            status = ExecutorStatus.BLOCKED if execution_status.upper() == "BLOCKED" else ExecutorStatus.FAILED
+        normalized_execution_status = execution_status.upper()
+        if normalized_execution_status not in {"COMPLETED", "FINISHED", "SUCCESS", "DONE"}:
+            if normalized_execution_status == "BLOCKED":
+                status = ExecutorStatus.BLOCKED
+            else:
+                status = ExecutorStatus.FAILED
             blockers.append(f"OpenHands execution status: {execution_status}.")
         if not validation_success and status is ExecutorStatus.COMPLETED:
             blockers.append("Deterministic validation did not fully pass.")
-        if blockers:
+        if blockers and status is ExecutorStatus.COMPLETED:
             status = ExecutorStatus.BLOCKED
 
         return ExecutorReport(
