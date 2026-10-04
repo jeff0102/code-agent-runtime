@@ -25,7 +25,8 @@ def init_repository(path):
         check=True,
     )
     (path / "README.md").write_text("initial\n")
-    subprocess.run(["git", "add", "README.md"], cwd=path, check=True)
+    (path / "SCOPE.md").write_text("# Test scope\n\nBuild the test project.\n")
+    subprocess.run(["git", "add", "README.md", "SCOPE.md"], cwd=path, check=True)
     subprocess.run(
         ["git", "commit", "-m", "initial"],
         cwd=path,
@@ -35,7 +36,6 @@ def init_repository(path):
 
 
 def create_session_and_task(store, repo, session_id="session-1"):
-    (repo / "SCOPE.md").write_text("# Test scope\n\nBuild the test project.\n")
     store.create_session(
         repository="owner/repo",
         workspace_path=str(repo),
