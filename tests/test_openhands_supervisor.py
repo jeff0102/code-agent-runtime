@@ -101,7 +101,7 @@ def test_adapter_reviews_and_controls_conversation():
 
     assert result.conversation_id == str(conversation.id)
     assert result.decision.decision is SupervisorDecisionType.REVISE
-    assert result.raw_response.startswith('{"decision"')
+    assert result.raw_response.startswith('{"schema_version"')
 
     adapter.interrupt()
     adapter.close()
