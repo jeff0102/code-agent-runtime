@@ -123,7 +123,7 @@ def test_executor_rejects_non_string_list_items():
         "blockers": [],
     }
 
-    with pytest.raises(ProtocolError, match=r"changed_files\\[1\\]"):
+    with pytest.raises(ProtocolError, match=r"changed_files\[1\]"):
         ExecutorReport.from_dict(payload)
 
 
