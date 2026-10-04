@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from runtime.models import Checkpoint, Decision, Iteration, Session, SessionStatus, Task
+from runtime.models import Checkpoint, Decision, Iteration, Session, SessionStatus, Task, TaskStatus
 from runtime.recovery import RecoveryAction, Reconciliation, reconcile_workspace
 from runtime.scope import ScopeError, fingerprint_scope
 from runtime.state import StateError, StateStore
@@ -154,6 +154,30 @@ class StartupRecovery:
 
         expected_message = f"runtime-checkpoint:{latest_iteration.iteration_id}"
         current_message = workspace.commit_message()
+
+        if (
+            latest_iteration.decision is Decision.ACCEPT
+            and task.status is TaskStatus.ACCEPTED
+            and self.state.checkpoint_for_iteration(latest_iteration.iteration_id) is None
+            and workspace.current_commit() == latest_iteration.base_commit
+            and not workspace.status().strip()
+        ):
+            self.state.create_checkpoint(
+                task.task_id,
+                latest_iteration.iteration_id,
+                commit_sha=workspace.current_commit(),
+            )
+            return self._record_result(
+                session,
+                StartupRecoveryResult(
+                    session_id=session.session_id,
+                    task_id=task.task_id,
+                    iteration_id=latest_iteration.iteration_id,
+                    outcome=StartupRecoveryOutcome.ALREADY_CHECKPOINTED,
+                    reason="Recovered an accepted clean workspace before checkpoint persistence.",
+                    reconciliation=None,
+                ),
+            )
 
         if current_message != expected_message:
             return None
