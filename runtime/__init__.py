@@ -11,6 +11,13 @@ from runtime.models import (
     Task,
     TaskStatus,
 )
+from runtime.protocol import (
+    ExecutorReport,
+    ExecutorStatus,
+    ProtocolError,
+    SupervisorDecision,
+    SupervisorDecisionType,
+)
 from runtime.recovery import RecoveryAction, Reconciliation, reconcile_workspace
 from runtime.state import StateStore, StateError
 from runtime.workspace import GitWorkspace, WorkspaceError, WorkspaceSnapshot
@@ -19,6 +26,8 @@ __all__ = [
     "ArtifactStore",
     "Checkpoint",
     "Decision",
+    "ExecutorReport",
+    "ExecutorStatus",
     "GitWorkspace",
     "Iteration",
     "Reconciliation",
@@ -29,6 +38,9 @@ __all__ = [
     "StateStore",
     "Task",
     "TaskStatus",
+    "ProtocolError",
+    "SupervisorDecision",
+    "SupervisorDecisionType",
     "WorkspaceError",
     "WorkspaceLease",
     "WorkspaceSnapshot",
