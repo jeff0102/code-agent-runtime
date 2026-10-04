@@ -56,6 +56,24 @@ class StartupRecovery:
             )
 
         if session.current_task_id is None:
+            workspace = GitWorkspace(session.workspace_path)
+            try:
+                workspace.assert_branch(session.branch)
+            except WorkspaceError as exc:
+                return self._block(
+                    session=session,
+                    task=None,
+                    iteration=None,
+                    reason=str(exc),
+                )
+            snapshot = workspace.snapshot()
+            if snapshot.dirty:
+                return self._block(
+                    session=session,
+                    task=None,
+                    iteration=None,
+                    reason="Workspace is dirty before the first task is planned.",
+                )
             return self._record_result(
                 session,
                 StartupRecoveryResult(
@@ -289,7 +307,7 @@ class StartupRecovery:
         self,
         *,
         session: Session,
-        task: Task,
+        task: Task | None,
         iteration: Iteration | None,
         reason: str,
     ) -> StartupRecoveryResult:
