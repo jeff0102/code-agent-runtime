@@ -55,6 +55,7 @@ class GitContext:
     diff: str
 
 
+
 @dataclass(frozen=True, slots=True)
 class ExecutorContext:
     """Implementation context presented to the Executor."""
@@ -137,6 +138,44 @@ class SupervisorContext:
         return json.dumps(self.to_dict(), sort_keys=True, ensure_ascii=False)
 
 
+
+
+@dataclass(frozen=True, slots=True)
+class PlannerContext:
+    """Read-only context used to select the next implementation task."""
+
+    repository: str
+    session_id: str
+    scope: ScopeContext
+    git: GitContext
+    completed_tasks: list[dict[str, Any]]
+    next_sequence: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "context_type": "supervisor_planner",
+            "schema_version": 1,
+            "repository": self.repository,
+            "session_id": self.session_id,
+            "scope": {
+                "scope_hash": self.scope.scope_hash,
+                "scope_text": self.scope.scope_text,
+                "agents_text": self.scope.agents_text,
+            },
+            "git": {
+                "branch": self.git.branch,
+                "base_commit": self.git.base_commit,
+                "status": self.git.status,
+                "diff": self.git.diff,
+            },
+            "completed_tasks": list(self.completed_tasks),
+            "next_sequence": self.next_sequence,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), sort_keys=True, ensure_ascii=False)
+
+
 def build_scope_context(
     workspace_path: str | Path,
     *,
@@ -180,6 +219,39 @@ def build_git_context(
         base_commit=base_commit,
         status=_bounded_text(snapshot.status, limits.git_status_chars),
         diff=_bounded_text(snapshot.diff, limits.diff_chars),
+    )
+
+
+
+
+def build_planner_context(
+    *,
+    repository: str,
+    session_id: str,
+    scope: ScopeContext,
+    git: GitContext,
+    completed_tasks: list[Task],
+    next_sequence: int,
+    limits: ContextLimits | None = None,
+) -> PlannerContext:
+    """Build a bounded context for selecting the next project task."""
+    if next_sequence < 1:
+        raise ContextError("next_sequence must be greater than zero")
+    return PlannerContext(
+        repository=repository,
+        session_id=session_id,
+        scope=scope,
+        git=git,
+        completed_tasks=[
+            {
+                "sequence": task.sequence,
+                "title": _bounded_text(task.title, 2_000).strip(),
+                "status": task.status.value,
+                "attempt_count": task.attempt_count,
+            }
+            for task in completed_tasks
+        ],
+        next_sequence=next_sequence,
     )
 
 

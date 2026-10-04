@@ -322,6 +322,97 @@ class StateStore:
         })
         return self.get_task(task_id)
 
+    def list_tasks(self, session_id: str) -> list[Task]:
+        """Return tasks for a session in deterministic sequence order."""
+        self.get_session(session_id)
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM tasks
+                WHERE session_id = ?
+                ORDER BY sequence
+                """,
+                (session_id,),
+            ).fetchall()
+        return [
+            Task(
+                task_id=row["task_id"],
+                session_id=row["session_id"],
+                sequence=row["sequence"],
+                title=row["title"],
+                objective=row["objective"],
+                instructions=row["instructions"],
+                acceptance_criteria=row["acceptance_criteria"],
+                status=TaskStatus(row["status"]),
+                attempt_count=row["attempt_count"],
+                created_at=row["created_at"],
+                completed_at=row["completed_at"],
+            )
+            for row in rows
+        ]
+
+    def next_task_sequence(self, session_id: str) -> int:
+        """Return the next task sequence number for a session."""
+        self.get_session(session_id)
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM tasks WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return int(row["next_sequence"])
+
+    def latest_iteration(self, task_id: str) -> Iteration | None:
+        """Return the most recent iteration for a task."""
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM iterations
+                WHERE task_id = ?
+                ORDER BY attempt_number DESC
+                LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return Iteration(
+            iteration_id=row["iteration_id"],
+            task_id=row["task_id"],
+            attempt_number=row["attempt_number"],
+            executor_conversation_id=row["executor_conversation_id"],
+            supervisor_conversation_id=row["supervisor_conversation_id"],
+            base_commit=row["base_commit"],
+            decision=Decision(row["decision"]),
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+            failure_reason=row["failure_reason"],
+        )
+
+    def get_task_by_sequence(self, session_id: str, sequence: int) -> Task | None:
+        """Return a task by session sequence number, if it exists."""
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE session_id = ? AND sequence = ?",
+                (session_id, sequence),
+            ).fetchone()
+        if row is None:
+            return None
+        return Task(
+            task_id=row["task_id"],
+            session_id=row["session_id"],
+            sequence=row["sequence"],
+            title=row["title"],
+            objective=row["objective"],
+            instructions=row["instructions"],
+            acceptance_criteria=row["acceptance_criteria"],
+            status=TaskStatus(row["status"]),
+            attempt_count=row["attempt_count"],
+            created_at=row["created_at"],
+            completed_at=row["completed_at"],
+        )
+
     def get_task(self, task_id: str) -> Task:
         with self.connection() as connection:
             row = connection.execute(
@@ -457,6 +548,44 @@ class StateStore:
             completed_at=row["completed_at"],
             failure_reason=row["failure_reason"],
         )
+
+    def latest_pending_plan(self, session_id: str) -> dict[str, Any] | None:
+        """Return the last planning decision not yet followed by task creation."""
+        events = self.list_events(session_id)
+        last_task_event = -1
+        for index, event in enumerate(events):
+            if event["event_type"] == "TASK_CREATED":
+                last_task_event = index
+        for event in reversed(events[last_task_event + 1:]):
+            if event["event_type"] == "SUPERVISOR_PLANNING_DECISION":
+                payload = event["payload"]
+                planned_sequence = payload.get("next_sequence")
+                if isinstance(planned_sequence, int) and self.get_task_by_sequence(
+                    session_id,
+                    planned_sequence,
+                ) is not None:
+                    return None
+                return payload
+            if event["event_type"] in {"SESSION_PLANNING_FAILED", "SESSION_PLANNING_BLOCKED"}:
+                return None
+        return None
+
+    def latest_supervisor_decision(self, iteration_id: str) -> dict[str, Any] | None:
+        """Return the latest persisted Supervisor decision event for an iteration."""
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT payload
+                FROM events
+                WHERE iteration_id = ? AND event_type = ?
+                ORDER BY created_at DESC, event_id DESC
+                LIMIT 1
+                """,
+                (iteration_id, "SUPERVISOR_DECISION"),
+            ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row["payload"])
 
     def list_active_sessions(self) -> list[Session]:
         """Return sessions that may require startup recovery."""
@@ -636,6 +765,23 @@ class StateStore:
             {"commit_sha": commit_sha},
         )
         return self.get_checkpoint(checkpoint_id)
+
+    def checkpoint_for_iteration(self, iteration_id: str) -> Checkpoint | None:
+        """Return the checkpoint recorded for an iteration, if any."""
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM checkpoints WHERE iteration_id = ?",
+                (iteration_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return Checkpoint(
+            checkpoint_id=row["checkpoint_id"],
+            task_id=row["task_id"],
+            iteration_id=row["iteration_id"],
+            commit_sha=row["commit_sha"],
+            created_at=row["created_at"],
+        )
 
     def get_checkpoint(self, checkpoint_id: str) -> Checkpoint:
         with self.connection() as connection:

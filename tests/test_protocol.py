@@ -8,6 +8,8 @@ from runtime.protocol import (
     ProtocolError,
     SupervisorDecision,
     SupervisorDecisionType,
+    SupervisorPlan,
+    SupervisorPlanType,
 )
 
 
@@ -146,3 +148,43 @@ def test_serialization_is_valid_json():
 
     assert decoded["message_type"] == "executor_report"
     assert decoded["status"] == "COMPLETED"
+
+
+def test_supervisor_next_task_plan_round_trips():
+    plan = SupervisorPlan(
+        action=SupervisorPlanType.NEXT_TASK,
+        title="Add configuration loading",
+        objective="Load runtime configuration from environment variables.",
+        instructions="Implement the loader and its validation.",
+        acceptance_criteria="Configuration is validated and covered by tests.",
+        blocking_reason=None,
+    )
+
+    restored = SupervisorPlan.from_json(plan.to_json())
+
+    assert restored == plan
+    assert restored.to_dict()["message_type"] == "supervisor_plan"
+
+
+def test_supervisor_done_plan_rejects_task_fields():
+    with pytest.raises(ProtocolError, match="DONE must not"):
+        SupervisorPlan(
+            action=SupervisorPlanType.DONE,
+            title="Should not exist",
+            objective=None,
+            instructions=None,
+            acceptance_criteria=None,
+            blocking_reason=None,
+        )
+
+
+def test_supervisor_block_plan_requires_reason():
+    with pytest.raises(ProtocolError, match="BLOCK requires"):
+        SupervisorPlan(
+            action=SupervisorPlanType.BLOCK,
+            title=None,
+            objective=None,
+            instructions=None,
+            acceptance_criteria=None,
+            blocking_reason=None,
+        )

@@ -23,3 +23,29 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  agents:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install OpenHands adapters
+        run: pip install -e ".[agents]"
+
+      - name: Import OpenHands SDK
+        run: python -c "from openhands.sdk import Agent, Conversation, LLM, Tool; from openhands.tools.file_editor import FileEditorTool; from openhands.tools.terminal import TerminalTool; print('OpenHands SDK imports OK')"
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build runtime image
+        run: docker build -t code-agent-runtime:test .

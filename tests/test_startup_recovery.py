@@ -165,3 +165,71 @@ def test_missing_scope_blocks_session(tmp_path):
     assert result.outcome == StartupRecoveryOutcome.BLOCKED
     assert "scope file not found" in result.reason
     assert store.get_session("session-1").status == SessionStatus.BLOCKED
+
+
+def test_recovery_repairs_checkpoint_commit_before_db_persistence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repository(repo)
+    store = StateStore(tmp_path / "runtime.db")
+    create_session_and_task(store, repo)
+
+    workspace = GitWorkspace(repo)
+    base_commit = workspace.current_commit()
+    iteration = store.start_iteration("session-1-task", base_commit=base_commit)
+    (repo / "README.md").write_text("accepted\\n", encoding="utf-8")
+    checkpoint_sha = workspace.checkpoint(
+        f"runtime-checkpoint:{iteration.iteration_id}"
+    )
+
+    result = StartupRecovery(store).recover_session("session-1")
+
+    assert result.outcome == StartupRecoveryOutcome.ALREADY_CHECKPOINTED
+    assert store.get_task("session-1-task").status == TaskStatus.ACCEPTED
+    checkpoint = store.checkpoint_for_iteration(iteration.iteration_id)
+    assert checkpoint is not None
+    assert checkpoint.commit_sha == checkpoint_sha
+
+
+def test_recovery_repairs_clean_accepted_iteration_before_checkpoint_record(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repository(repo)
+    store = StateStore(tmp_path / "runtime.db")
+    create_session_and_task(store, repo)
+
+    workspace = GitWorkspace(repo)
+    base_commit = workspace.current_commit()
+    iteration = store.start_iteration("session-1-task", base_commit=base_commit)
+    store.complete_iteration(iteration.iteration_id, Decision.ACCEPT)
+
+    result = StartupRecovery(store).recover_session("session-1")
+
+    assert result.outcome == StartupRecoveryOutcome.ALREADY_CHECKPOINTED
+    checkpoint = store.checkpoint_for_iteration(iteration.iteration_id)
+    assert checkpoint is not None
+    assert checkpoint.commit_sha == base_commit
+
+
+def test_initial_session_with_dirty_workspace_is_blocked(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repository(repo)
+    store = StateStore(tmp_path / "runtime.db")
+    store.create_session(
+        repository="owner/repo",
+        workspace_path=str(repo),
+        branch="main",
+        scope_hash=fingerprint_scope(repo).sha256,
+        max_iterations=3,
+        session_id="session-1",
+    )
+
+    (repo / "README.md").write_text("manual\n", encoding="utf-8")
+
+    result = StartupRecovery(store).recover_session("session-1")
+
+    assert result.outcome == StartupRecoveryOutcome.BLOCKED
+    assert result.task_id is None
+    assert store.get_session("session-1").status == SessionStatus.BLOCKED
+    assert store.list_events("session-1")[-1]["event_type"] == "SESSION_RECOVERY_BLOCKED"

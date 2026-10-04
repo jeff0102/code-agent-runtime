@@ -53,6 +53,23 @@ class GitWorkspace:
     def current_commit(self) -> str:
         return self.run("rev-parse", "HEAD").strip()
 
+    def branch_exists(self, branch: str) -> bool:
+        """Return whether a local branch exists."""
+        result = subprocess.run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            cwd=self.path,
+            check=False,
+        )
+        return result.returncode == 0
+
+    def switch_branch(self, branch: str) -> None:
+        """Switch branches without creating or mutating commits."""
+        self.run("switch", branch)
+
+    def commit_message(self, commit_sha: str = "HEAD") -> str:
+        """Return the full commit message for a commit."""
+        return self.run("log", "-1", "--format=%B", commit_sha).strip()
+
     def status(self) -> str:
         return self.run("status", "--porcelain=v1")
 

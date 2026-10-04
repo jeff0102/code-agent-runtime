@@ -9,6 +9,9 @@ description = "Persistent orchestration runtime for autonomous Supervisor/Execut
 requires-python = ">=3.11"
 dependencies = []
 
+[project.scripts]
+code-agent-runtime = "runtime.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",

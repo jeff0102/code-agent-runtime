@@ -33,7 +33,7 @@ class ValidationCommand:
             raise ValidationError(f"Validation command {self.name!r} has no argv")
         if any(not isinstance(item, str) or not item for item in self.argv):
             raise ValidationError(f"Validation command {self.name!r} contains an invalid argv item")
-        if any("\\x00" in item for item in self.argv):
+        if any("\x00" in item for item in self.argv):
             raise ValidationError(f"Validation command {self.name!r} contains a NUL byte")
         if self.timeout_seconds <= 0:
             raise ValidationError(
