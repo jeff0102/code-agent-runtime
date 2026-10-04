@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+from uuid import uuid4
 
 from runtime.artifacts import ArtifactStore
 from runtime.context import (
@@ -16,7 +17,7 @@ from runtime.context import (
     build_supervisor_context,
 )
 from runtime.lease import WorkspaceLease
-from runtime.models import Decision, SessionStatus, TaskStatus
+from runtime.models import Decision, Session, SessionStatus, TaskStatus
 from runtime.openhands_executor import OpenHandsExecutionResult
 from runtime.openhands_supervisor import OpenHandsSupervisorPlanResult, OpenHandsSupervisorResult
 from runtime.protocol import (
@@ -31,6 +32,7 @@ from runtime.startup_recovery import StartupRecovery, StartupRecoveryOutcome
 from runtime.state import StateError, StateStore
 from runtime.validation import ValidationCommand, ValidationResult, ValidationRunner
 from runtime.workspace import GitWorkspace, WorkspaceError
+from runtime.scope import fingerprint_scope
 
 
 class OrchestrationError(RuntimeError):
@@ -64,6 +66,8 @@ class SupervisorConversationLike(Protocol):
     def conversation_id(self) -> str: ...
 
     def review(self, prompt: str) -> OpenHandsSupervisorResult: ...
+
+    def plan(self, prompt: str) -> OpenHandsSupervisorPlanResult: ...
 
     def plan(self, prompt: str) -> OpenHandsSupervisorPlanResult: ...
 
@@ -109,6 +113,19 @@ class SessionRunResult:
     failure_reason: str | None = None
 
 
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRunResult:
+    """Terminal result of a complete multi-task session."""
+
+    session_id: str
+    session_status: SessionStatus
+    completed_tasks: int
+    last_task_id: str | None
+    failure_reason: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class TaskRunResult:
     """Terminal result of one task execution loop."""
@@ -138,6 +155,239 @@ class Orchestrator:
         self.executor_factory = executor_factory
         self.supervisor_factory = supervisor_factory
         self.config = config or OrchestratorConfig()
+
+    def start_session(
+        self,
+        *,
+        repository: str,
+        workspace_path: str | Path,
+        max_iterations: int,
+        branch: str | None = None,
+        session_id: str | None = None,
+    ) -> Session:
+        """Create an isolated runtime-owned branch and durable session."""
+        workspace = GitWorkspace(workspace_path)
+        if workspace.status().strip():
+            raise OrchestrationError("Cannot start a session from a dirty workspace.")
+
+        scope = fingerprint_scope(workspace.path)
+        session_id = session_id or str(uuid4())
+        branch = branch or f"agent/{session_id}"
+        base_commit = workspace.current_commit()
+
+        workspace.create_branch(branch, base_commit=base_commit)
+        try:
+            return self.state.create_session(
+                repository=repository,
+                workspace_path=str(workspace.path),
+                branch=branch,
+                scope_hash=scope.sha256,
+                max_iterations=max_iterations,
+                session_id=session_id,
+            )
+        except Exception:
+            try:
+                workspace.run("switch", "-")
+            except WorkspaceError:
+                pass
+            raise
+
+    def run_session(self, session_id: str) -> SessionRunResult:
+        """Run planning and task execution until the Supervisor declares DONE."""
+        recovery = StartupRecovery(self.state).recover_session(session_id)
+        session = self.state.get_session(session_id)
+        if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
+            return SessionRunResult(
+                session_id=session_id,
+                session_status=session.status,
+                completed_tasks=0,
+                last_task_id=session.current_task_id,
+                failure_reason=recovery.reason,
+            )
+
+        reviewer_workspace = self._prepare_reviewer_workspace(session_id)
+        with WorkspaceLease(
+            self.state,
+            session.workspace_path,
+            owner_id=f"orchestrator:{session_id}",
+            ttl_seconds=self.config.lease_ttl_seconds,
+        ):
+            completed_tasks = 0
+            last_task_id: str | None = None
+            recovery_outcome = recovery.outcome
+
+            while True:
+                session = self.state.get_session(session_id)
+                if session.status is not SessionStatus.RUNNING:
+                    return SessionRunResult(
+                        session_id=session_id,
+                        session_status=session.status,
+                        completed_tasks=completed_tasks,
+                        last_task_id=last_task_id,
+                    )
+
+                task = (
+                    self.state.get_task(session.current_task_id)
+                    if session.current_task_id is not None
+                    else None
+                )
+                if task is not None and task.status not in {
+                    TaskStatus.ACCEPTED,
+                    TaskStatus.BLOCKED,
+                    TaskStatus.FAILED,
+                }:
+                    result = self._run_locked(
+                        session_id=session_id,
+                        task_id=task.task_id,
+                        workspace=GitWorkspace(session.workspace_path),
+                        reviewer_workspace=reviewer_workspace,
+                        recovery_outcome=recovery_outcome,
+                        finish_session_on_accept=False,
+                    )
+                    recovery_outcome = StartupRecoveryOutcome.READY_FOR_EXECUTION
+                    if result.task_status is not TaskStatus.ACCEPTED:
+                        return SessionRunResult(
+                            session_id=session_id,
+                            session_status=result.session_status,
+                            completed_tasks=completed_tasks,
+                            last_task_id=result.task_id,
+                            failure_reason=result.failure_reason,
+                        )
+                    completed_tasks += 1
+                    last_task_id = result.task_id
+                    continue
+
+                plan = self._plan_next_task(
+                    session_id=session_id,
+                    reviewer_workspace=reviewer_workspace,
+                )
+                if plan.plan.action is SupervisorPlanType.DONE:
+                    self.state.append_event(
+                        session_id,
+                        None,
+                        None,
+                        "SESSION_SCOPE_COMPLETED",
+                        {"completed_tasks": completed_tasks},
+                    )
+                    self.state.set_session_status(session_id, SessionStatus.DONE)
+                    return SessionRunResult(
+                        session_id=session_id,
+                        session_status=SessionStatus.DONE,
+                        completed_tasks=completed_tasks,
+                        last_task_id=last_task_id,
+                    )
+
+                if plan.plan.action is SupervisorPlanType.BLOCK:
+                    reason = plan.plan.blocking_reason or "Supervisor blocked session planning."
+                    self.state.append_event(
+                        session_id,
+                        None,
+                        None,
+                        "SESSION_PLANNING_BLOCKED",
+                        {"reason": reason},
+                    )
+                    self.state.set_session_status(session_id, SessionStatus.BLOCKED)
+                    return SessionRunResult(
+                        session_id=session_id,
+                        session_status=SessionStatus.BLOCKED,
+                        completed_tasks=completed_tasks,
+                        last_task_id=last_task_id,
+                        failure_reason=reason,
+                    )
+
+                tasks = self.state.list_tasks(session_id)
+                sequence = max((item.sequence for item in tasks), default=0) + 1
+                task = self.state.create_task(
+                    session_id,
+                    sequence=sequence,
+                    title=plan.plan.title or "",
+                    objective=plan.plan.objective or "",
+                    instructions=plan.plan.instructions or "",
+                    acceptance_criteria=plan.plan.acceptance_criteria or "",
+                )
+                self.state.append_event(
+                    session_id,
+                    task.task_id,
+                    None,
+                    "SUPERVISOR_TASK_PLANNED",
+                    {"sequence": sequence, "plan": plan.plan.to_dict()},
+                )
+
+    def _plan_next_task(
+        self,
+        *,
+        session_id: str,
+        reviewer_workspace: Path,
+    ) -> OpenHandsSupervisorPlanResult:
+        session = self.state.get_session(session_id)
+        workspace = GitWorkspace(session.workspace_path)
+        snapshot = workspace.snapshot()
+        scope = build_scope_context(
+            session.workspace_path,
+            scope_hash=session.scope_hash,
+            limits=self.config.context_limits,
+        )
+        tasks = self.state.list_tasks(session_id)
+        context = build_planning_context(
+            repository=session.repository,
+            session_id=session_id,
+            scope=scope,
+            git=build_git_context(
+                snapshot,
+                base_commit=self._latest_checkpoint_sha(session_id)
+                or snapshot.commit_sha,
+                limits=self.config.context_limits,
+            ),
+            tasks=tasks,
+        )
+        previous_conversation_id = None
+        checkpoint = self.state.latest_checkpoint(session_id)
+        if checkpoint is not None:
+            previous_conversation_id = self.state.get_iteration(
+                checkpoint.iteration_id
+            ).supervisor_conversation_id
+
+        supervisor = self.supervisor_factory.create(
+            reviewer_workspace=reviewer_workspace,
+            conversation_id=previous_conversation_id,
+        )
+        self.state.append_event(
+            session_id,
+            None,
+            None,
+            "SUPERVISOR_PLANNING_STARTED",
+            {"conversation_id": supervisor.conversation_id},
+        )
+        try:
+            result = supervisor.plan(self._planner_prompt(context.to_json()))
+        finally:
+            supervisor.close()
+
+        path, digest, size = self.artifact_store.write_text(
+            session_id,
+            "session",
+            "planning",
+            "supervisor-plan.json",
+            result.plan.to_json(),
+        )
+        self.state.record_artifact(
+            session_id,
+            "supervisor-plan",
+            path,
+            digest,
+            size,
+        )
+        self.state.append_event(
+            session_id,
+            None,
+            None,
+            "SUPERVISOR_PLAN",
+            {
+                "conversation_id": result.conversation_id,
+                "plan": result.plan.to_dict(),
+            },
+        )
+        return result
 
     def run_task(
         self,
@@ -714,6 +964,7 @@ class Orchestrator:
                         commit_sha=checkpoint_sha,
                     )
                     if finalize_session:
+                        if finish_session_on_accept:
                         self.state.set_session_status(session_id, SessionStatus.DONE)
                     return TaskRunResult(
                         session_id=session_id,
@@ -1036,6 +1287,20 @@ class Orchestrator:
     def _latest_checkpoint_sha(self, session_id: str) -> str | None:
         checkpoint = self.state.latest_checkpoint(session_id)
         return checkpoint.commit_sha if checkpoint is not None else None
+
+    @staticmethod
+    def _planner_prompt(context_json: str) -> str:
+        return (
+            "You are the read-only Supervisor planning the next implementation "
+            "task for an autonomous coding session. Review SCOPE.md, AGENTS.md, "
+            "Git evidence, and completed tasks. Return exactly one "
+            "SupervisorTaskPlan JSON object. Create one atomic next task only "
+            "when useful work remains. Return DONE only when the entire scope "
+            "is satisfied. Return BLOCK when safe progress cannot continue. "
+            "Do not modify files.\n\n"
+            "Planning context (JSON):\n"
+            f"{context_json}"
+        )
 
     @staticmethod
     def _executor_prompt(context_json: str) -> str:
