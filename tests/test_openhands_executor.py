@@ -148,6 +148,10 @@ def test_factory_builds_executor_with_only_write_tools(monkeypatch, tmp_path):
         "model": "openai/gemini-primary",
         "api_key": "sk-dummy",
         "base_url": "http://litellm:4000/v1",
+        "num_retries": 3,
+        "retry_min_wait": 60,
+        "retry_max_wait": 60,
+        "retry_multiplier": 1.0,
     }
 
     tool_names = [
