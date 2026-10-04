@@ -11,18 +11,21 @@ from runtime.context import (
     ContextLimits,
     build_executor_context,
     build_git_context,
+    build_planner_context,
     build_scope_context,
     build_supervisor_context,
 )
 from runtime.lease import WorkspaceLease
 from runtime.models import Decision, SessionStatus, TaskStatus
 from runtime.openhands_executor import OpenHandsExecutionResult
-from runtime.openhands_supervisor import OpenHandsSupervisorResult
+from runtime.openhands_supervisor import OpenHandsSupervisorPlanResult, OpenHandsSupervisorResult
 from runtime.protocol import (
     ExecutorReport,
     ExecutorStatus,
     SupervisorDecision,
     SupervisorDecisionType,
+    SupervisorPlan,
+    SupervisorPlanType,
 )
 from runtime.startup_recovery import StartupRecovery, StartupRecoveryOutcome
 from runtime.state import StateError, StateStore
@@ -59,6 +62,8 @@ class SupervisorConversationLike(Protocol):
     def conversation_id(self) -> str: ...
 
     def review(self, prompt: str) -> OpenHandsSupervisorResult: ...
+
+    def plan(self, prompt: str) -> OpenHandsSupervisorPlanResult: ...
 
     def interrupt(self) -> None: ...
 
