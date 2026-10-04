@@ -1,0 +1,12 @@
+# Environment variables containing private API keys
+.env
+
+# JetBrains IDE metadata
+.idea/
+
+# Operating system artifacts
+.DS_Store
+Thumbs.db
+
+# Logs and runtime dumps
+*.log
