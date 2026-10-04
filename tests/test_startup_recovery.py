@@ -177,8 +177,7 @@ def test_recovery_repairs_checkpoint_commit_before_db_persistence(tmp_path):
     workspace = GitWorkspace(repo)
     base_commit = workspace.current_commit()
     iteration = store.start_iteration("session-1-task", base_commit=base_commit)
-    (repo / "README.md").write_text("accepted
-", encoding="utf-8")
+    (repo / "README.md").write_text("accepted\\n", encoding="utf-8")
     checkpoint_sha = workspace.checkpoint(
         f"runtime-checkpoint:{iteration.iteration_id}"
     )
