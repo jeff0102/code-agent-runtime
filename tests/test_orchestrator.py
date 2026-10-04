@@ -498,3 +498,25 @@ def test_orchestrator_rejects_executor_created_commit(tmp_path):
 
     assert result.task_status is TaskStatus.FAILED
     assert "must not create commits" in (result.failure_reason or "")
+
+
+def test_orchestrator_blocks_when_task_limit_is_reached(tmp_path):
+    repo, store, artifacts = create_runtime(tmp_path)
+    executor_factory = FakeExecutorFactory(repo, ["accepted\n"])
+    supervisor_factory = FakeSupervisorFactory(
+        decisions=[accept_decision()],
+        plans=[next_task_plan("Second task")],
+    )
+
+    result = Orchestrator(
+        store,
+        artifacts,
+        executor_factory,
+        supervisor_factory,
+        OrchestratorConfig(max_tasks_per_session=1),
+    ).run_session("session-1")
+
+    assert result.session_status is SessionStatus.BLOCKED
+    assert result.tasks_completed == 1
+    assert result.failure_reason == "Maximum tasks per session reached: 1."
+    assert store.list_events("session-1")[-1]["event_type"] == "MAX_TASKS_REACHED"
