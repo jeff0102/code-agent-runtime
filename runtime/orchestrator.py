@@ -700,6 +700,18 @@ class Orchestrator:
         reviewer_workspace: Path,
     ) -> SupervisorPlan:
         session = self.state.get_session(session_id)
+        pending_plan = self.state.latest_pending_plan(session_id)
+        if pending_plan is not None:
+            plan = SupervisorPlan.from_dict(pending_plan["plan"])
+            self.state.append_event(
+                session_id,
+                None,
+                None,
+                "SUPERVISOR_PLANNING_RESUMED",
+                {"plan": plan.to_dict()},
+            )
+            return plan
+
         scope = build_scope_context(
             session.workspace_path,
             scope_hash=session.scope_hash,
