@@ -72,8 +72,13 @@ class SupervisorDecision:
     blocking_reason: str | None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.decision, SupervisorDecisionType):
+            raise ProtocolError("decision must be a SupervisorDecisionType")
         if not isinstance(self.task_complete, bool):
             raise ProtocolError("task_complete must be a boolean")
+        _require_string_list(self.instructions, "instructions")
+        if self.blocking_reason is not None:
+            _require_string(self.blocking_reason, "blocking_reason")
 
         if self.decision is SupervisorDecisionType.ACCEPT:
             if not self.task_complete:
@@ -180,6 +185,14 @@ class ExecutorReport:
     blockers: list[str]
 
     def __post_init__(self) -> None:
+        if not isinstance(self.status, ExecutorStatus):
+            raise ProtocolError("status must be an ExecutorStatus")
+        _require_string(self.summary, "summary")
+        _require_string_list(self.changed_files, "changed_files")
+        _require_string_list(self.tests_executed, "tests_executed")
+        _require_string(self.validation_summary, "validation_summary")
+        _require_string_list(self.blockers, "blockers")
+
         if self.status is ExecutorStatus.COMPLETED and self.blockers:
             raise ProtocolError("COMPLETED must not contain blockers")
 
