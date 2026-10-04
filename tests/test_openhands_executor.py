@@ -40,6 +40,9 @@ class FakeConversation:
 class FakeTool:
     name = "fake-tool"
 
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
 
 class FakeLLM:
     def __init__(self, **kwargs):
