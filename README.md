@@ -117,4 +117,5 @@ The runtime is considered ready for external projects when:
 - a session can be restarted without losing persisted work or bypassing Git safety checks;
 - workspace ownership is enforced by a lease;
 - accepted work always has a durable checkpoint;
+- total task creation is bounded per session;
 - unexpected workspace or scope changes block execution rather than being overwritten.
