@@ -31,6 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repository")
     parser.add_argument("--branch")
     parser.add_argument("--max-iterations", type=int, default=5)
+    parser.add_argument("--max-tasks", type=int, default=100)
     parser.add_argument(
         "--validation",
         action="append",
@@ -58,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"Workspace is not a Git repository: {workspace}")
     if args.max_iterations < 1:
         raise SystemExit("--max-iterations must be greater than zero")
+    if args.max_tasks < 1:
+        raise SystemExit("--max-tasks must be greater than zero")
     if not args.executor_model or not args.supervisor_model:
         raise SystemExit(
             "Both --executor-model and --supervisor-model are required "
@@ -119,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         config=OrchestratorConfig(
             validation_commands=validations,
             reviewer_workspace=args.reviewer_workspace,
+            max_tasks_per_session=args.max_tasks,
         ),
     )
 
