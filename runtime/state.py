@@ -413,35 +413,6 @@ class StateStore:
             completed_at=row["completed_at"],
         )
 
-    def list_tasks(self, session_id: str) -> list[Task]:
-        """Return session tasks in deterministic sequence order."""
-        with self.connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT *
-                FROM tasks
-                WHERE session_id = ?
-                ORDER BY sequence
-                """,
-                (session_id,),
-            ).fetchall()
-        return [
-            Task(
-                task_id=row["task_id"],
-                session_id=row["session_id"],
-                sequence=row["sequence"],
-                title=row["title"],
-                objective=row["objective"],
-                instructions=row["instructions"],
-                acceptance_criteria=row["acceptance_criteria"],
-                status=TaskStatus(row["status"]),
-                attempt_count=row["attempt_count"],
-                created_at=row["created_at"],
-                completed_at=row["completed_at"],
-            )
-            for row in rows
-        ]
-
     def get_task(self, task_id: str) -> Task:
         with self.connection() as connection:
             row = connection.execute(
