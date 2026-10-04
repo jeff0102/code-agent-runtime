@@ -388,3 +388,113 @@ def test_orchestrator_creates_missing_runtime_branch(tmp_path):
         capture_output=True,
     ).stdout.strip()
     assert branch == "agent/session-1"
+
+
+def test_orchestrator_plans_first_task_when_session_has_no_current_task(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repository(repo)
+
+    store = StateStore(tmp_path / "runtime.db")
+    store.create_session(
+        repository="owner/repo",
+        workspace_path=str(repo),
+        branch="agent/session-1",
+        scope_hash=fingerprint_scope(repo).sha256,
+        max_iterations=3,
+        session_id="session-1",
+    )
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    executor_factory = FakeExecutorFactory(repo, ["planned task\n"])
+    supervisor_factory = FakeSupervisorFactory(
+        decisions=[accept_decision()],
+        plans=[next_task_plan("First task"), done_plan()],
+    )
+
+    result = Orchestrator(
+        store,
+        artifacts,
+        executor_factory,
+        supervisor_factory,
+        OrchestratorConfig(),
+    ).run_session("session-1")
+
+    assert result.session_status is SessionStatus.DONE
+    assert result.tasks_completed == 1
+    assert len(store.list_tasks("session-1")) == 1
+
+
+def test_orchestrator_never_accepts_failed_required_validation(tmp_path):
+    repo, store, artifacts = create_runtime(tmp_path, max_iterations=2)
+    executor_factory = FakeExecutorFactory(repo, ["first\n", "second\n"])
+    supervisor_factory = FakeSupervisorFactory(
+        decisions=[accept_decision(), accept_decision()],
+    )
+    from runtime.validation import ValidationCommand
+
+    config = OrchestratorConfig(
+        validation_commands=(
+            ValidationCommand(
+                name="always-fails",
+                argv=(sys.executable, "-c", "import sys; sys.exit(1)"),
+            ),
+        ),
+    )
+
+    result = Orchestrator(
+        store,
+        artifacts,
+        executor_factory,
+        supervisor_factory,
+        config,
+    ).run_task("session-1")
+
+    assert result.task_status is TaskStatus.BLOCKED
+    assert result.session_status is SessionStatus.BLOCKED
+    assert store.get_task("task-1").status is TaskStatus.BLOCKED
+    events = [event["event_type"] for event in store.list_events("session-1")]
+    assert "SUPERVISOR_ACCEPT_REJECTED_RUNTIME_GATE" in events
+
+
+def test_orchestrator_rejects_executor_created_commit(tmp_path):
+    repo, store, artifacts = create_runtime(tmp_path)
+    executor_factory = FakeExecutorFactory(repo, ["accepted\n"])
+    original_factory = executor_factory
+
+    class CommittingExecutorFactory:
+        def create(self, *, workspace_path, conversation_id=None):
+            executor = original_factory.create(
+                workspace_path=workspace_path,
+                conversation_id=conversation_id,
+            )
+            original_send_and_run = executor.send_and_run
+
+            def send_and_run(message):
+                result = original_send_and_run(message)
+                subprocess.run(
+                    ["git", "add", "README.md"],
+                    cwd=repo,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "commit", "-m", "executor-owned commit"],
+                    cwd=repo,
+                    check=True,
+                    capture_output=True,
+                )
+                return result
+
+            executor.send_and_run = send_and_run
+            return executor
+
+    supervisor_factory = FakeSupervisorFactory([accept_decision()])
+    result = Orchestrator(
+        store,
+        artifacts,
+        CommittingExecutorFactory(),
+        supervisor_factory,
+        OrchestratorConfig(),
+    ).run_task("session-1")
+
+    assert result.task_status is TaskStatus.FAILED
+    assert "must not create commits" in (result.failure_reason or "")
