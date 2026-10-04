@@ -430,6 +430,62 @@ class StateStore:
         )
         return self.get_iteration(iteration_id)
 
+    def get_pending_iteration(self, task_id: str) -> Iteration | None:
+        """Return the task's active pending iteration, if one exists."""
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM iterations
+                WHERE task_id = ? AND decision = ?
+                ORDER BY attempt_number DESC
+                LIMIT 1
+                """,
+                (task_id, Decision.PENDING.value),
+            ).fetchone()
+        if row is None:
+            return None
+        return Iteration(
+            iteration_id=row["iteration_id"],
+            task_id=row["task_id"],
+            attempt_number=row["attempt_number"],
+            executor_conversation_id=row["executor_conversation_id"],
+            supervisor_conversation_id=row["supervisor_conversation_id"],
+            base_commit=row["base_commit"],
+            decision=Decision(row["decision"]),
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+            failure_reason=row["failure_reason"],
+        )
+
+    def list_active_sessions(self) -> list[Session]:
+        """Return sessions that may require startup recovery."""
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM sessions
+                WHERE status IN (?, ?)
+                ORDER BY created_at
+                """,
+                (SessionStatus.RUNNING.value, SessionStatus.PAUSED.value),
+            ).fetchall()
+        return [
+            Session(
+                session_id=row["session_id"],
+                repository=row["repository"],
+                workspace_path=row["workspace_path"],
+                branch=row["branch"],
+                scope_hash=row["scope_hash"],
+                status=SessionStatus(row["status"]),
+                current_task_id=row["current_task_id"],
+                max_iterations=row["max_iterations"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+            for row in rows
+        ]
+
     def get_iteration(self, iteration_id: str) -> Iteration:
         with self.connection() as connection:
             row = connection.execute(
