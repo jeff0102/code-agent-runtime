@@ -69,7 +69,7 @@ def fake_sdk():
         "Agent": FakeAgent,
         "Conversation": FakeConversationFactory,
         "LLM": FakeLLM,
-        "Tool": lambda **kwargs: SimpleNamespace(**kwargs),
+        "Tool": lambda **kwargs: FakeTool(**kwargs),
         "FileEditorTool": FakeTool,
         "TerminalTool": FakeTool,
     }
