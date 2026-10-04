@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shlex
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -121,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    print(f"session_id={session.session_id}", file=sys.stderr)
     result = orchestrator.run_session(session.session_id)
     print(json.dumps(_result_dict(result), sort_keys=True, indent=2))
     return 0 if result.session_status.value == "DONE" else 1
