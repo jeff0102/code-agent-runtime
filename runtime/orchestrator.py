@@ -157,6 +157,7 @@ class Orchestrator:
         ):
             self._prepare_target_branch(self.state.get_session(session_id))
             recovery = StartupRecovery(self.state).recover_session(session_id)
+            recovery_outcome = recovery.outcome
             if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
                 current = self.state.get_session(session_id)
                 return SessionRunResult(
@@ -184,7 +185,7 @@ class Orchestrator:
                         task_id=current_task.task_id,
                         workspace=workspace,
                         reviewer_workspace=reviewer_workspace,
-                        recovery_outcome=recovery.outcome,
+                        recovery_outcome=recovery_outcome,
                         finalize_session=False,
                     )
                     if result.task_status is not TaskStatus.ACCEPTED:
@@ -260,7 +261,7 @@ class Orchestrator:
                     "TASK_PLANNED",
                     {"sequence": task.sequence, "title": task.title},
                 )
-                recovery = StartupRecoveryOutcome.READY_FOR_EXECUTION
+                recovery_outcome = StartupRecoveryOutcome.READY_FOR_EXECUTION
 
     def _run_task_internal(
         self,
