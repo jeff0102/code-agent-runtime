@@ -18,7 +18,12 @@ from runtime.lease import WorkspaceLease
 from runtime.models import Decision, SessionStatus, TaskStatus
 from runtime.openhands_executor import OpenHandsExecutionResult
 from runtime.openhands_supervisor import OpenHandsSupervisorResult
-from runtime.protocol import ExecutorReport, ExecutorStatus, SupervisorDecisionType
+from runtime.protocol import (
+    ExecutorReport,
+    ExecutorStatus,
+    SupervisorDecision,
+    SupervisorDecisionType,
+)
 from runtime.startup_recovery import StartupRecovery, StartupRecoveryOutcome
 from runtime.state import StateError, StateStore
 from runtime.validation import ValidationCommand, ValidationResult, ValidationRunner
@@ -209,7 +214,7 @@ class Orchestrator:
             )
 
         previous_revision_instructions: list[str] = []
-        previous_decision: dict[str, object] | None = None
+        previous_decision: SupervisorDecision | None = None
 
         while True:
             session = self.state.get_session(session_id)
@@ -445,7 +450,7 @@ class Orchestrator:
                 )
                 supervisor.close()
 
-                previous_decision = review.decision.to_dict()
+                previous_decision = review.decision
                 if review.decision.decision is SupervisorDecisionType.REVISE:
                     previous_revision_instructions = list(review.decision.instructions)
 
