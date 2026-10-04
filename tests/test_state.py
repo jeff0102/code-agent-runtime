@@ -31,7 +31,7 @@ def test_session_task_iteration_checkpoint_lifecycle(tmp_path):
     assert store.get_task("task-1").status == TaskStatus.EXECUTING
 
     store.set_task_status("task-1", TaskStatus.REVIEWING)
-    store.complete_iteration("dummy" if False else iteration.iteration_id, Decision.ACCEPT)
+    store.complete_iteration(iteration.iteration_id, Decision.ACCEPT)
 
     accepted_task = store.get_task("task-1")
     assert accepted_task.status == TaskStatus.ACCEPTED
