@@ -63,7 +63,7 @@ class FakeSDK:
 
 def test_parse_supervisor_decision_accepts_plain_json():
     decision = parse_supervisor_decision(
-        '{"decision":"ACCEPT","task_complete":true,"instructions":[],"blocking_reason":null}'
+        '{"schema_version":1,"message_type":"supervisor_decision","decision":"ACCEPT","task_complete":true,"instructions":[],"blocking_reason":null}'
     )
     assert decision.decision is SupervisorDecisionType.ACCEPT
 
@@ -71,7 +71,7 @@ def test_parse_supervisor_decision_accepts_plain_json():
 def test_parse_supervisor_decision_accepts_markdown_fence():
     response = (
         chr(96) * 3
-        + 'json\n{"decision":"BLOCK","task_complete":false,'
+        + 'json\n{"schema_version":1,"message_type":"supervisor_decision","decision":"BLOCK","task_complete":false,'
         '"instructions":[],"blocking_reason":"Tests are unavailable."}\n'
         + chr(96) * 3
     )
@@ -92,7 +92,7 @@ def test_config_requires_model():
 
 def test_adapter_reviews_and_controls_conversation():
     conversation = FakeConversation(
-        '{"decision":"REVISE","task_complete":false,'
+        '{"schema_version":1,"message_type":"supervisor_decision","decision":"REVISE","task_complete":false,'
         '"instructions":["Fix the parser."],"blocking_reason":null}'
     )
     adapter = OpenHandsSupervisorAdapter(conversation)
