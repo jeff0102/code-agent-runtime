@@ -657,6 +657,97 @@ class Orchestrator:
                     reason=f"Unexpected orchestration error: {exc}",
                 )
 
+    def _plan_next_task(
+        self,
+        *,
+        session_id: str,
+        workspace: GitWorkspace,
+        reviewer_workspace: Path,
+    ) -> SupervisorPlan:
+        session = self.state.get_session(session_id)
+        scope = build_scope_context(
+            session.workspace_path,
+            scope_hash=session.scope_hash,
+            limits=self.config.context_limits,
+        )
+        snapshot = workspace.snapshot()
+        tasks = self.state.list_tasks(session_id)
+        planner_context = build_planner_context(
+            repository=session.repository,
+            session_id=session_id,
+            scope=scope,
+            git=build_git_context(
+                snapshot,
+                base_commit=self._latest_checkpoint_sha(session_id) or snapshot.commit_sha,
+                limits=self.config.context_limits,
+            ),
+            completed_tasks=tasks,
+            next_sequence=self.state.next_task_sequence(session_id),
+            limits=self.config.context_limits,
+        )
+        supervisor = self.supervisor_factory.create(
+            reviewer_workspace=reviewer_workspace,
+            conversation_id=None,
+        )
+        self.state.append_event(
+            session_id,
+            None,
+            None,
+            "SUPERVISOR_PLANNING_STARTED",
+            {"conversation_id": supervisor.conversation_id},
+        )
+        try:
+            result = supervisor.plan(self._planner_prompt(planner_context.to_json()))
+        finally:
+            supervisor.close()
+
+        self.state.append_event(
+            session_id,
+            None,
+            None,
+            "SUPERVISOR_PLANNING_DECISION",
+            {
+                "conversation_id": result.conversation_id,
+                "plan": result.plan.to_dict(),
+            },
+        )
+        return result.plan
+
+    @staticmethod
+    def _planner_prompt(context_json: str) -> str:
+        return (
+            "You are the planning Supervisor for an autonomous software development runtime. "
+            "Review only the supplied repository evidence. Do not modify files. "
+            "Determine the next atomic implementation task required to satisfy SCOPE.md. "
+            "Return exactly one SupervisorPlan JSON object. "
+            "Use NEXT_TASK when actionable work remains, DONE only when the entire scope is satisfied, "
+            "and BLOCK when safe progress cannot continue. "
+            "NEXT_TASK must be small, independently reviewable, and include concrete acceptance criteria.\n\n"
+            "Planner context (JSON):\n"
+            f"{context_json}"
+        )
+
+    def _prepare_target_branch(self, session) -> None:
+        workspace = GitWorkspace(session.workspace_path)
+        current = workspace.current_branch()
+        if current == session.branch:
+            return
+        if workspace.status().strip():
+            raise OrchestrationError(
+                f"Cannot switch to runtime branch {session.branch!r} from a dirty workspace."
+            )
+        if workspace.branch_exists(session.branch):
+            workspace.switch_branch(session.branch)
+        else:
+            workspace.create_branch(session.branch)
+
+    def _accepted_task_count(self, session_id: str) -> int:
+        return sum(
+            1
+            for task in self.state.list_tasks(session_id)
+            if task.status is TaskStatus.ACCEPTED
+        )
+
     def _prepare_reviewer_workspace(self, session_id: str) -> Path:
         workspace = (
             Path(self.config.reviewer_workspace)
