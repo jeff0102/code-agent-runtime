@@ -102,12 +102,12 @@ class OrchestratorConfig:
 
 @dataclass(frozen=True, slots=True)
 class SessionRunResult:
-    """Terminal result of a complete multi-task session."""
+    """Terminal result of an autonomous session."""
 
     session_id: str
     session_status: SessionStatus
-    completed_tasks: int
-    last_task_id: str | None
+    tasks_completed: int
+    checkpoint_sha: str | None = None
     failure_reason: str | None = None
 
 
@@ -176,6 +176,18 @@ class Orchestrator:
             except WorkspaceError:
                 pass
             raise
+
+    def run_task(
+        self,
+        session_id: str,
+        task_id: str | None = None,
+    ) -> TaskRunResult:
+        """Recover a session and execute one task to a terminal state."""
+        return self._run_task_internal(
+            session_id,
+            task_id,
+            finalize_session=True,
+        )
 
     def run_session(self, session_id: str) -> SessionRunResult:
         """Run task planning and execution until the Supervisor declares DONE."""
