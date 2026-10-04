@@ -291,6 +291,17 @@ class Orchestrator:
         ):
             self._prepare_target_branch(self.state.get_session(session_id))
             recovery = StartupRecovery(self.state).recover_session(session_id)
+            if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
+                session = self.state.get_session(session_id)
+                task = self.state.get_task(resolved_task_id)
+                return TaskRunResult(
+                    session_id=session_id,
+                    task_id=resolved_task_id,
+                    task_status=task.status,
+                    session_status=session.status,
+                    iterations=task.attempt_count,
+                    failure_reason=recovery.reason,
+                )
             return self._run_task_locked(
                 session_id=session_id,
                 task_id=resolved_task_id,
