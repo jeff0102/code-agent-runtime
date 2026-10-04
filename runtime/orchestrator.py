@@ -744,7 +744,6 @@ class Orchestrator:
                         commit_sha=checkpoint_sha,
                     )
                     if finalize_session:
-                        if finish_session_on_accept:
                         self.state.set_session_status(session_id, SessionStatus.DONE)
                     return TaskRunResult(
                         session_id=session_id,
