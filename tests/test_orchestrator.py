@@ -82,18 +82,28 @@ class FakeExecutor:
         self.contents = contents
         self.closed = False
         self.interrupted = False
+        self.send_calls = 0
+        self.run_calls = 0
 
     @property
     def conversation_id(self) -> str:
         return self._conversation_id
 
-    def send_and_run(self, message: str) -> OpenHandsExecutionResult:
+    def _execute(self) -> OpenHandsExecutionResult:
         content = self.contents.pop(0)
         (self.repo / "README.md").write_text(content, encoding="utf-8")
         return OpenHandsExecutionResult(
             conversation_id=self._conversation_id,
             execution_status="finished",
         )
+
+    def send_and_run(self, message: str) -> OpenHandsExecutionResult:
+        self.send_calls += 1
+        return self._execute()
+
+    def run(self) -> OpenHandsExecutionResult:
+        self.run_calls += 1
+        return self._execute()
 
     def interrupt(self) -> None:
         self.interrupted = True
