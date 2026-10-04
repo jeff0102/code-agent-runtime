@@ -210,5 +210,5 @@ def test_missing_optional_dependencies_have_a_clear_error(monkeypatch):
 
     factory = OpenHandsExecutorFactory(OpenHandsExecutorConfig(model="test"))
 
-    with pytest.raises(OpenHandsAdapterError, match=r"\.[agents]"):
+    with pytest.raises(OpenHandsAdapterError, match=r"\.\[agents\]"):
         factory.create(workspace_path=Path("."))
