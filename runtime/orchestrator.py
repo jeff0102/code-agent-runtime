@@ -586,36 +586,42 @@ class Orchestrator:
                     previous_revision_instructions = list(review.decision.instructions)
 
                 decision = Decision(review.decision.decision.value)
-                self.state.complete_iteration(
-                    iteration.iteration_id,
-                    decision,
-                    failure_reason=review.decision.blocking_reason,
-                )
 
                 self._heartbeat(session.workspace_path, session_id)
 
                 if decision is Decision.ACCEPT:
                     checkpoint_sha = (
                         workspace.checkpoint(
-                            f"checkpoint: task {task.sequence} {task.title}"
+                            f"runtime-checkpoint:{iteration.iteration_id}"
                         )
                         if workspace.status().strip()
                         else workspace.current_commit()
+                    )
+                    self.state.complete_iteration(
+                        iteration.iteration_id,
+                        Decision.ACCEPT,
                     )
                     self.state.create_checkpoint(
                         task_id,
                         iteration.iteration_id,
                         commit_sha=checkpoint_sha,
                     )
-                    self.state.set_session_status(session_id, SessionStatus.DONE)
+                    if finalize_session:
+                        self.state.set_session_status(session_id, SessionStatus.DONE)
                     return TaskRunResult(
                         session_id=session_id,
                         task_id=task_id,
                         task_status=TaskStatus.ACCEPTED,
-                        session_status=SessionStatus.DONE,
+                        session_status=self.state.get_session(session_id).status,
                         iterations=self.state.get_task(task_id).attempt_count,
                         checkpoint_sha=checkpoint_sha,
                     )
+
+                self.state.complete_iteration(
+                    iteration.iteration_id,
+                    decision,
+                    failure_reason=review.decision.blocking_reason,
+                )
 
                 if decision is Decision.BLOCK:
                     return TaskRunResult(
