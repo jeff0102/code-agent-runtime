@@ -126,3 +126,23 @@ def test_invalid_validation_command_name_is_rejected():
 def test_empty_command_is_rejected():
     with pytest.raises(ValidationError):
         ValidationCommand(name="empty", argv=())
+
+
+
+def test_duplicate_validation_command_names_are_rejected(tmp_path):
+    with pytest.raises(ValidationError, match="must be unique"):
+        runner(tmp_path).run(
+            [
+                ValidationCommand(
+                    name="duplicate",
+                    argv=(sys.executable, "-c", "print('one')"),
+                ),
+                ValidationCommand(
+                    name="duplicate",
+                    argv=(sys.executable, "-c", "print('two')"),
+                ),
+            ],
+            session_id="session",
+            task_id="task",
+            iteration_id="iteration",
+        )
