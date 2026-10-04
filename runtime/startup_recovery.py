@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from runtime.models import Iteration, Session, Task
+from runtime.models import Checkpoint, Iteration, Session, SessionStatus, Task
 from runtime.recovery import RecoveryAction, Reconciliation, reconcile_workspace
 from runtime.state import StateError, StateStore
 from runtime.workspace import GitWorkspace, WorkspaceError
@@ -118,7 +118,7 @@ class StartupRecovery:
         *,
         task: Task,
         pending_iteration: Iteration | None,
-        latest_checkpoint: object | None,
+        latest_checkpoint: Checkpoint | None,
         reconciliation: Reconciliation,
     ) -> StartupRecoveryOutcome:
         if reconciliation.action == RecoveryAction.BLOCK_UNEXPECTED:
@@ -133,7 +133,7 @@ class StartupRecovery:
         if reconciliation.action == RecoveryAction.CLEAN_EXPECTED_BASE:
             if pending_iteration is not None:
                 return StartupRecoveryOutcome.READY_FOR_EXECUTION
-            if getattr(latest_checkpoint, "task_id", None) == task.task_id:
+            if latest_checkpoint is not None and latest_checkpoint.task_id == task.task_id:
                 return StartupRecoveryOutcome.ALREADY_CHECKPOINTED
             return StartupRecoveryOutcome.READY_FOR_EXECUTION
 
@@ -147,7 +147,7 @@ class StartupRecovery:
         iteration: Iteration | None,
         reason: str,
     ) -> StartupRecoveryResult:
-        self.state.set_session_status(session.session_id, session.status.BLOCKED)
+        self.state.set_session_status(session.session_id, SessionStatus.BLOCKED)
         self.state.append_event(
             session.session_id,
             task.task_id,
