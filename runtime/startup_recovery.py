@@ -94,17 +94,24 @@ class StartupRecovery:
             reconciliation=reconciliation,
         )
 
-        return self._record_result(
-            session,
-            StartupRecoveryResult(
-                session_id=session.session_id,
-                task_id=task.task_id,
-                iteration_id=pending_iteration.iteration_id if pending_iteration else None,
-                outcome=outcome,
-                reason=reconciliation.reason,
-                reconciliation=reconciliation,
-            ),
+        result = StartupRecoveryResult(
+            session_id=session.session_id,
+            task_id=task.task_id,
+            iteration_id=pending_iteration.iteration_id if pending_iteration else None,
+            outcome=outcome,
+            reason=reconciliation.reason,
+            reconciliation=reconciliation,
         )
+
+        if outcome is StartupRecoveryOutcome.BLOCKED:
+            return self._block(
+                session=session,
+                task=task,
+                iteration=pending_iteration,
+                reason=reconciliation.reason,
+            )
+
+        return self._record_result(session, result)
 
     def recover_active_sessions(self) -> list[StartupRecoveryResult]:
         """Recover all active sessions persisted by the runtime."""
