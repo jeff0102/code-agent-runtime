@@ -19,6 +19,7 @@ from runtime.protocol import (
     SupervisorDecisionType,
 )
 from runtime.recovery import RecoveryAction, Reconciliation, reconcile_workspace
+from runtime.startup_recovery import StartupRecovery, StartupRecoveryOutcome, StartupRecoveryResult
 from runtime.state import StateStore, StateError
 from runtime.workspace import GitWorkspace, WorkspaceError, WorkspaceSnapshot
 
@@ -36,6 +37,9 @@ __all__ = [
     "SessionStatus",
     "StateError",
     "StateStore",
+    "StartupRecovery",
+    "StartupRecoveryOutcome",
+    "StartupRecoveryResult",
     "Task",
     "TaskStatus",
     "ProtocolError",
