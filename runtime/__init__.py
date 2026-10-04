@@ -14,6 +14,13 @@ from runtime.context import (
     build_supervisor_context,
 )
 from runtime.lease import WorkspaceLease
+from runtime.openhands_executor import (
+    OpenHandsAdapterError,
+    OpenHandsConversationAdapter,
+    OpenHandsExecutionResult,
+    OpenHandsExecutorConfig,
+    OpenHandsExecutorFactory,
+)
 from runtime.openhands_supervisor import (
     OpenHandsSupervisorAdapter,
     OpenHandsSupervisorConfig,
@@ -57,6 +64,16 @@ __all__ = [
     "GitContext",
     "GitWorkspace",
     "Iteration",
+    "OpenHandsAdapterError",
+    "OpenHandsConversationAdapter",
+    "OpenHandsExecutionResult",
+    "OpenHandsExecutorConfig",
+    "OpenHandsExecutorFactory",
+    "OpenHandsSupervisorAdapter",
+    "OpenHandsSupervisorConfig",
+    "OpenHandsSupervisorError",
+    "OpenHandsSupervisorFactory",
+    "OpenHandsSupervisorResult",
     "Reconciliation",
     "RecoveryAction",
     "Session",
