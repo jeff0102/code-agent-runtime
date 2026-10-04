@@ -10,6 +10,7 @@ from runtime.openhands_supervisor import (
     OpenHandsSupervisorError,
     OpenHandsSupervisorFactory,
     parse_supervisor_decision,
+    parse_supervisor_plan,
 )
 from runtime.protocol import SupervisorDecisionType
 
@@ -158,3 +159,28 @@ def test_factory_rejects_missing_reviewer_workspace(monkeypatch, tmp_path):
 
     with pytest.raises(OpenHandsSupervisorError, match="workspace"):
         factory.create(reviewer_workspace=tmp_path / "missing")
+
+
+def test_parse_supervisor_plan_accepts_next_task():
+    plan = parse_supervisor_plan(
+        '{"schema_version":1,"message_type":"supervisor_plan","action":"NEXT_TASK",'
+        '"title":"Add configuration loader","objective":"Load runtime configuration.",'
+        '"instructions":"Implement the loader.","acceptance_criteria":"Loader is tested.",'
+        '"blocking_reason":null}'
+    )
+    assert plan.title == "Add configuration loader"
+
+
+def test_adapter_plans_next_task():
+    response = (
+        '{"schema_version":1,"message_type":"supervisor_plan","action":"NEXT_TASK",'
+        '"title":"Add configuration loader","objective":"Load runtime configuration.",'
+        '"instructions":"Implement the loader.","acceptance_criteria":"Loader is tested.",'
+        '"blocking_reason":null}'
+    )
+    conversation = FakeConversation(response)
+    adapter = OpenHandsSupervisorAdapter(conversation)
+
+    result = adapter.plan("Plan the next task.")
+
+    assert result.plan.title == "Add configuration loader"
