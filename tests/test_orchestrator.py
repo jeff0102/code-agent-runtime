@@ -128,12 +128,12 @@ class FakeSupervisor:
     def __init__(
         self,
         conversation_id: str,
-        decision: SupervisorDecision | None,
-        plan: SupervisorPlan | None,
+        decisions: list[SupervisorDecision],
+        plans: list[SupervisorPlan],
     ):
         self._conversation_id = conversation_id
-        self.decision = decision
-        self.plan_value = plan
+        self.decisions = decisions
+        self.plans = plans
         self.closed = False
 
     @property
@@ -141,23 +141,21 @@ class FakeSupervisor:
         return self._conversation_id
 
     def review(self, prompt: str) -> OpenHandsSupervisorResult:
-        if self.decision is None:
-            raise AssertionError("No fake decision configured for this Supervisor call")
+        decision = self.decisions.pop(0)
         return OpenHandsSupervisorResult(
             conversation_id=self._conversation_id,
-            decision=self.decision,
-            raw_response=self.decision.to_json(),
+            decision=decision,
+            raw_response=decision.to_json(),
         )
 
     def plan(self, prompt: str):
         from runtime.openhands_supervisor import OpenHandsSupervisorPlanResult
 
-        if self.plan_value is None:
-            raise AssertionError("No fake plan configured for this Supervisor call")
+        plan = self.plans.pop(0)
         return OpenHandsSupervisorPlanResult(
             conversation_id=self._conversation_id,
-            plan=self.plan_value,
-            raw_response=self.plan_value.to_json(),
+            plan=plan,
+            raw_response=plan.to_json(),
         )
 
     def interrupt(self) -> None:
@@ -179,10 +177,8 @@ class FakeSupervisorFactory:
 
     def create(self, *, reviewer_workspace, conversation_id=None):
         self.calls.append(conversation_id)
-        decision = self.decisions.pop(0) if self.decisions else None
-        plan = self.plans.pop(0) if self.plans else None
         next_id = conversation_id or f"supervisor-{len(self.calls)}"
-        return FakeSupervisor(next_id, decision, plan)
+        return FakeSupervisor(next_id, self.decisions, self.plans)
 
 
 def accept_decision() -> SupervisorDecision:
