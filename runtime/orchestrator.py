@@ -145,18 +145,6 @@ class Orchestrator:
     def run_session(self, session_id: str) -> SessionRunResult:
         """Run task planning and execution until the Supervisor declares DONE."""
         session = self.state.get_session(session_id)
-        self._prepare_target_branch(session)
-        recovery = StartupRecovery(self.state).recover_session(session_id)
-        if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
-            current = self.state.get_session(session_id)
-            return SessionRunResult(
-                session_id=session_id,
-                session_status=current.status,
-                tasks_completed=self._accepted_task_count(session_id),
-                checkpoint_sha=self._latest_checkpoint_sha(session_id),
-                failure_reason=recovery.reason,
-            )
-
         reviewer_workspace = self._prepare_reviewer_workspace(session_id)
         workspace = GitWorkspace(session.workspace_path)
         with WorkspaceLease(
@@ -165,6 +153,17 @@ class Orchestrator:
             owner_id=f"orchestrator:{session_id}",
             ttl_seconds=self.config.lease_ttl_seconds,
         ):
+            self._prepare_target_branch(self.state.get_session(session_id))
+            recovery = StartupRecovery(self.state).recover_session(session_id)
+            if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
+                current = self.state.get_session(session_id)
+                return SessionRunResult(
+                    session_id=session_id,
+                    session_status=current.status,
+                    tasks_completed=self._accepted_task_count(session_id),
+                    checkpoint_sha=self._latest_checkpoint_sha(session_id),
+                    failure_reason=recovery.reason,
+                )
             while True:
                 session = self.state.get_session(session_id)
                 if session.status is not SessionStatus.RUNNING:
@@ -195,11 +194,29 @@ class Orchestrator:
                             failure_reason=result.failure_reason,
                         )
 
-                plan = self._plan_next_task(
-                    session_id=session_id,
-                    workspace=workspace,
-                    reviewer_workspace=reviewer_workspace,
-                )
+                try:
+                    plan = self._plan_next_task(
+                        session_id=session_id,
+                        workspace=workspace,
+                        reviewer_workspace=reviewer_workspace,
+                    )
+                except Exception as exc:
+                    reason = f"Supervisor planning failed: {exc}"
+                    self.state.set_session_status(session_id, SessionStatus.FAILED)
+                    self.state.append_event(
+                        session_id,
+                        None,
+                        None,
+                        "SESSION_PLANNING_FAILED",
+                        {"reason": reason},
+                    )
+                    return SessionRunResult(
+                        session_id=session_id,
+                        session_status=SessionStatus.FAILED,
+                        tasks_completed=self._accepted_task_count(session_id),
+                        checkpoint_sha=self._latest_checkpoint_sha(session_id),
+                        failure_reason=reason,
+                    )
                 if plan.action is SupervisorPlanType.DONE:
                     self.state.set_session_status(session_id, SessionStatus.DONE)
                     return SessionRunResult(
@@ -251,8 +268,7 @@ class Orchestrator:
         finalize_session: bool,
     ) -> TaskRunResult:
         session_for_branch = self.state.get_session(session_id)
-        self._prepare_target_branch(session_for_branch)
-        recovery = StartupRecovery(self.state).recover_session(session_id)
+        recovery = None
         if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
             session = self.state.get_session(session_id)
             resolved_task_id = task_id or session.current_task_id
@@ -290,6 +306,8 @@ class Orchestrator:
             owner_id=f"orchestrator:{session_id}",
             ttl_seconds=self.config.lease_ttl_seconds,
         ):
+            self._prepare_target_branch(self.state.get_session(session_id))
+            recovery = StartupRecovery(self.state).recover_session(session_id)
             return self._run_task_locked(
                 session_id=session_id,
                 task_id=resolved_task_id,
