@@ -215,7 +215,7 @@ def test_orchestrator_revises_until_acceptance(tmp_path):
     assert result.task_status is TaskStatus.ACCEPTED
     assert result.session_status is SessionStatus.DONE
     assert result.iterations == 2
-    assert executor_factory.calls == [None, executor_factory.calls[1] or ""]
+    assert executor_factory.calls == [None, None]
     assert len(supervisor_factory.calls) == 2
     assert store.get_task("task-1").attempt_count == 2
     assert len([e for e in store.list_events("session-1") if e["event_type"] == "ITERATION_COMPLETED"]) == 2
