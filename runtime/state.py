@@ -705,6 +705,23 @@ class StateStore:
         )
         return self.get_checkpoint(checkpoint_id)
 
+    def checkpoint_for_iteration(self, iteration_id: str) -> Checkpoint | None:
+        """Return the checkpoint recorded for an iteration, if any."""
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM checkpoints WHERE iteration_id = ?",
+                (iteration_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return Checkpoint(
+            checkpoint_id=row["checkpoint_id"],
+            task_id=row["task_id"],
+            iteration_id=row["iteration_id"],
+            commit_sha=row["commit_sha"],
+            created_at=row["created_at"],
+        )
+
     def get_checkpoint(self, checkpoint_id: str) -> Checkpoint:
         with self.connection() as connection:
             row = connection.execute(
