@@ -253,7 +253,6 @@ class Orchestrator:
         session_for_branch = self.state.get_session(session_id)
         self._prepare_target_branch(session_for_branch)
         recovery = StartupRecovery(self.state).recover_session(session_id)
-        recovery = StartupRecovery(self.state).recover_session(session_id)
         if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
             session = self.state.get_session(session_id)
             resolved_task_id = task_id or session.current_task_id
@@ -291,15 +290,16 @@ class Orchestrator:
             owner_id=f"orchestrator:{session_id}",
             ttl_seconds=self.config.lease_ttl_seconds,
         ):
-            return self._run_locked(
+            return self._run_task_locked(
                 session_id=session_id,
                 task_id=resolved_task_id,
                 workspace=workspace,
                 reviewer_workspace=reviewer_workspace,
                 recovery_outcome=recovery.outcome,
+                finalize_session=finalize_session,
             )
 
-    def _run_locked(
+    def _run_task_locked(
         self,
         *,
         session_id: str,
@@ -307,6 +307,7 @@ class Orchestrator:
         workspace: GitWorkspace,
         reviewer_workspace: Path,
         recovery_outcome: StartupRecoveryOutcome,
+        finalize_session: bool = True,
     ) -> TaskRunResult:
         session = self.state.get_session(session_id)
         task = self.state.get_task(task_id)
@@ -322,7 +323,8 @@ class Orchestrator:
             )
 
         if task.status is TaskStatus.ACCEPTED:
-            self.state.set_session_status(session_id, SessionStatus.DONE)
+            if finalize_session:
+                self.state.set_session_status(session_id, SessionStatus.DONE)
             return TaskRunResult(
                 session_id=session_id,
                 task_id=task_id,
