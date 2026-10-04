@@ -14,6 +14,14 @@ from runtime.context import (
     build_supervisor_context,
 )
 from runtime.lease import WorkspaceLease
+from runtime.openhands_supervisor import (
+    OpenHandsSupervisorAdapter,
+    OpenHandsSupervisorConfig,
+    OpenHandsSupervisorError,
+    OpenHandsSupervisorFactory,
+    OpenHandsSupervisorResult,
+    parse_supervisor_decision,
+)
 from runtime.models import (
     Checkpoint,
     Decision,
@@ -80,5 +88,6 @@ __all__ = [
     "ValidationError",
     "ValidationResult",
     "ValidationRunner",
+    "parse_supervisor_decision",
     "reconcile_workspace",
 ]
