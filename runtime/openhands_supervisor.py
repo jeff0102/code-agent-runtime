@@ -47,7 +47,6 @@ class OpenHandsSupervisorPlanResult:
     conversation_id: str
     plan: SupervisorPlan
     raw_response: str
-    raw_response: str
 
 
 class OpenHandsSupervisorAdapter:
