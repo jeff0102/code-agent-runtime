@@ -1005,7 +1005,6 @@ class Orchestrator:
             parts.append(f"{result.name}: {state} (exit={result.exit_code})")
         return "; ".join(parts)
 
-    @staticmethod
     def _record_workspace_artifacts(
         self,
         *,
