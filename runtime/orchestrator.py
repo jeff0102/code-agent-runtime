@@ -87,12 +87,15 @@ class OrchestratorConfig:
 
     validation_commands: tuple[ValidationCommand, ...] = ()
     lease_ttl_seconds: float = 3600.0
+    max_tasks_per_session: int = 100
     context_limits: ContextLimits = ContextLimits()
     reviewer_workspace: str | Path | None = None
 
     def __post_init__(self) -> None:
         if self.lease_ttl_seconds <= 0:
             raise ValueError("lease_ttl_seconds must be greater than zero")
+        if self.max_tasks_per_session < 1:
+            raise ValueError("max_tasks_per_session must be greater than zero")
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +231,34 @@ class Orchestrator:
                         tasks_completed=self._accepted_task_count(session_id),
                         checkpoint_sha=self._latest_checkpoint_sha(session_id),
                     )
+                if (
+                    plan.action is SupervisorPlanType.NEXT_TASK
+                    and self._accepted_task_count(session_id)
+                    >= self.config.max_tasks_per_session
+                ):
+                    reason = (
+                        "Maximum tasks per session reached: "
+                        f"{self.config.max_tasks_per_session}."
+                    )
+                    self.state.set_session_status(session_id, SessionStatus.BLOCKED)
+                    self.state.append_event(
+                        session_id,
+                        None,
+                        None,
+                        "MAX_TASKS_REACHED",
+                        {
+                            "accepted_tasks": self._accepted_task_count(session_id),
+                            "limit": self.config.max_tasks_per_session,
+                        },
+                    )
+                    return SessionRunResult(
+                        session_id=session_id,
+                        session_status=SessionStatus.BLOCKED,
+                        tasks_completed=self._accepted_task_count(session_id),
+                        checkpoint_sha=self._latest_checkpoint_sha(session_id),
+                        failure_reason=reason,
+                    )
+
                 if plan.action is SupervisorPlanType.BLOCK:
                     self.state.set_session_status(session_id, SessionStatus.BLOCKED)
                     self.state.append_event(
