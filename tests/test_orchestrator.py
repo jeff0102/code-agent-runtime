@@ -347,9 +347,7 @@ def done_plan() -> SupervisorPlan:
 
 def test_orchestrator_runs_full_session_until_supervisor_done(tmp_path):
     repo, store, artifacts = create_runtime(tmp_path)
-    executor_factory = FakeExecutorFactory(repo, ["first task
-", "second task
-"])
+    executor_factory = FakeExecutorFactory(repo, ["first task\\n", "second task\\n"])
     supervisor_factory = FakeSupervisorFactory(
         decisions=[accept_decision(), accept_decision()],
         plans=[next_task_plan("Second task"), done_plan()],
