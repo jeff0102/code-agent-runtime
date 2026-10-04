@@ -56,59 +56,6 @@ class GitContext:
 
 
 
-
-@dataclass(frozen=True, slots=True)
-class PlanningContext:
-    """Read-only project context used to select the next task."""
-
-    repository: str
-    session_id: str
-    scope: ScopeContext
-    git: GitContext
-    tasks: list[dict[str, Any]]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "context_type": "supervisor_planning",
-            "schema_version": 1,
-            "repository": self.repository,
-            "session_id": self.session_id,
-            "scope": {
-                "scope_hash": self.scope.scope_hash,
-                "scope_text": self.scope.scope_text,
-                "agents_text": self.scope.agents_text,
-            },
-            "git": {
-                "branch": self.git.branch,
-                "base_commit": self.git.base_commit,
-                "status": self.git.status,
-                "diff": self.git.diff,
-            },
-            "tasks": list(self.tasks),
-        }
-
-    def to_json(self) -> str:
-        return json.dumps(self.to_dict(), sort_keys=True, ensure_ascii=False)
-
-
-def build_planning_context(
-    *,
-    repository: str,
-    session_id: str,
-    scope: ScopeContext,
-    git: GitContext,
-    tasks: list[Task],
-) -> PlanningContext:
-    """Build bounded, deterministic planning context."""
-    return PlanningContext(
-        repository=repository,
-        session_id=session_id,
-        scope=scope,
-        git=git,
-        tasks=[_task_dict(task) for task in tasks],
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class ExecutorContext:
     """Implementation context presented to the Executor."""
