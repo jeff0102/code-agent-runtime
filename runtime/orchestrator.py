@@ -523,6 +523,12 @@ class Orchestrator:
                 )
 
                 snapshot = workspace.snapshot()
+                self._record_workspace_artifacts(
+                    session_id=session_id,
+                    task_id=task_id,
+                    iteration_id=iteration.iteration_id,
+                    snapshot=snapshot,
+                )
                 executor_report = self._build_executor_report(
                     snapshot=snapshot,
                     execution_status=execution.execution_status,
@@ -1008,6 +1014,35 @@ class Orchestrator:
         return "; ".join(parts)
 
     @staticmethod
+    def _record_workspace_artifacts(
+        self,
+        *,
+        session_id: str,
+        task_id: str,
+        iteration_id: str,
+        snapshot,
+    ) -> None:
+        for artifact_type, content in (
+            ("git.status", snapshot.status),
+            ("git.diff", snapshot.diff),
+        ):
+            path, digest, size = self.artifact_store.write_text(
+                session_id,
+                task_id,
+                iteration_id,
+                artifact_type,
+                content,
+            )
+            self.state.record_artifact(
+                session_id,
+                artifact_type,
+                path,
+                digest,
+                size,
+                task_id=task_id,
+                iteration_id=iteration_id,
+            )
+
     def _build_executor_report(
         *,
         snapshot,
