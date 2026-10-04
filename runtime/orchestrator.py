@@ -695,7 +695,7 @@ class Orchestrator:
                 self.state.complete_iteration(
                     iteration.iteration_id,
                     decision,
-                    failure_reason=review.decision.blocking_reason,
+                    failure_reason=effective_decision.blocking_reason,
                 )
 
                 if decision is Decision.BLOCK:
