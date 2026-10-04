@@ -94,6 +94,17 @@ class OrchestratorConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionRunResult:
+    """Terminal result of an autonomous session."""
+
+    session_id: str
+    session_status: SessionStatus
+    tasks_completed: int
+    checkpoint_sha: str | None = None
+    failure_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TaskRunResult:
     """Terminal result of one task execution loop."""
 
@@ -128,7 +139,120 @@ class Orchestrator:
         session_id: str,
         task_id: str | None = None,
     ) -> TaskRunResult:
-        """Recover a session and execute its current task to a terminal state."""
+        """Recover a session and execute one task to a terminal state."""
+        return self._run_task_internal(session_id, task_id, finalize_session=True)
+
+    def run_session(self, session_id: str) -> SessionRunResult:
+        """Run task planning and execution until the Supervisor declares DONE."""
+        session = self.state.get_session(session_id)
+        self._prepare_target_branch(session)
+        recovery = StartupRecovery(self.state).recover_session(session_id)
+        if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
+            current = self.state.get_session(session_id)
+            return SessionRunResult(
+                session_id=session_id,
+                session_status=current.status,
+                tasks_completed=self._accepted_task_count(session_id),
+                checkpoint_sha=self._latest_checkpoint_sha(session_id),
+                failure_reason=recovery.reason,
+            )
+
+        reviewer_workspace = self._prepare_reviewer_workspace(session_id)
+        workspace = GitWorkspace(session.workspace_path)
+        with WorkspaceLease(
+            self.state,
+            session.workspace_path,
+            owner_id=f"orchestrator:{session_id}",
+            ttl_seconds=self.config.lease_ttl_seconds,
+        ):
+            while True:
+                session = self.state.get_session(session_id)
+                if session.status is not SessionStatus.RUNNING:
+                    return SessionRunResult(
+                        session_id=session_id,
+                        session_status=session.status,
+                        tasks_completed=self._accepted_task_count(session_id),
+                        checkpoint_sha=self._latest_checkpoint_sha(session_id),
+                        failure_reason="Session is not RUNNING.",
+                    )
+
+                current_task = self.state.get_task(session.current_task_id) if session.current_task_id else None
+                if current_task is not None and current_task.status is not TaskStatus.ACCEPTED:
+                    result = self._run_task_locked(
+                        session_id=session_id,
+                        task_id=current_task.task_id,
+                        workspace=workspace,
+                        reviewer_workspace=reviewer_workspace,
+                        recovery_outcome=recovery.outcome,
+                        finalize_session=False,
+                    )
+                    if result.task_status is not TaskStatus.ACCEPTED:
+                        return SessionRunResult(
+                            session_id=session_id,
+                            session_status=self.state.get_session(session_id).status,
+                            tasks_completed=self._accepted_task_count(session_id),
+                            checkpoint_sha=self._latest_checkpoint_sha(session_id),
+                            failure_reason=result.failure_reason,
+                        )
+
+                plan = self._plan_next_task(
+                    session_id=session_id,
+                    workspace=workspace,
+                    reviewer_workspace=reviewer_workspace,
+                )
+                if plan.action is SupervisorPlanType.DONE:
+                    self.state.set_session_status(session_id, SessionStatus.DONE)
+                    return SessionRunResult(
+                        session_id=session_id,
+                        session_status=SessionStatus.DONE,
+                        tasks_completed=self._accepted_task_count(session_id),
+                        checkpoint_sha=self._latest_checkpoint_sha(session_id),
+                    )
+                if plan.action is SupervisorPlanType.BLOCK:
+                    self.state.set_session_status(session_id, SessionStatus.BLOCKED)
+                    self.state.append_event(
+                        session_id,
+                        None,
+                        None,
+                        "SESSION_PLANNING_BLOCKED",
+                        {"reason": plan.blocking_reason},
+                    )
+                    return SessionRunResult(
+                        session_id=session_id,
+                        session_status=SessionStatus.BLOCKED,
+                        tasks_completed=self._accepted_task_count(session_id),
+                        checkpoint_sha=self._latest_checkpoint_sha(session_id),
+                        failure_reason=plan.blocking_reason,
+                    )
+
+                sequence = self.state.next_task_sequence(session_id)
+                task = self.state.create_task(
+                    session_id,
+                    sequence=sequence,
+                    title=plan.title or "",
+                    objective=plan.objective or "",
+                    instructions=plan.instructions or "",
+                    acceptance_criteria=plan.acceptance_criteria or "",
+                )
+                self.state.append_event(
+                    session_id,
+                    task.task_id,
+                    None,
+                    "TASK_PLANNED",
+                    {"sequence": task.sequence, "title": task.title},
+                )
+                recovery = StartupRecoveryOutcome.READY_FOR_EXECUTION
+
+    def _run_task_internal(
+        self,
+        session_id: str,
+        task_id: str | None,
+        *,
+        finalize_session: bool,
+    ) -> TaskRunResult:
+        session_for_branch = self.state.get_session(session_id)
+        self._prepare_target_branch(session_for_branch)
+        recovery = StartupRecovery(self.state).recover_session(session_id)
         recovery = StartupRecovery(self.state).recover_session(session_id)
         if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
             session = self.state.get_session(session_id)
