@@ -21,6 +21,14 @@ from runtime.openhands_executor import (
     OpenHandsExecutorConfig,
     OpenHandsExecutorFactory,
 )
+from runtime.openhands_supervisor import (
+    OpenHandsSupervisorAdapter,
+    OpenHandsSupervisorConfig,
+    OpenHandsSupervisorError,
+    OpenHandsSupervisorFactory,
+    OpenHandsSupervisorResult,
+    parse_supervisor_decision,
+)
 from runtime.models import (
     Checkpoint,
     Decision,
@@ -61,6 +69,11 @@ __all__ = [
     "OpenHandsExecutionResult",
     "OpenHandsExecutorConfig",
     "OpenHandsExecutorFactory",
+    "OpenHandsSupervisorAdapter",
+    "OpenHandsSupervisorConfig",
+    "OpenHandsSupervisorError",
+    "OpenHandsSupervisorFactory",
+    "OpenHandsSupervisorResult",
     "Reconciliation",
     "RecoveryAction",
     "Session",
@@ -92,5 +105,6 @@ __all__ = [
     "ValidationError",
     "ValidationResult",
     "ValidationRunner",
+    "parse_supervisor_decision",
     "reconcile_workspace",
 ]
