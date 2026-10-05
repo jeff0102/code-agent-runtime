@@ -890,7 +890,7 @@ class Orchestrator:
                     )
                     checkpoint_sha = (
                         workspace.checkpoint(
-                            f"runtime-checkpoint:{iteration.iteration_id}"
+                            _checkpoint_message(task.title, iteration.iteration_id)
                         )
                         if workspace.status().strip() or merge_in_progress
                         else workspace.current_commit()
@@ -1333,7 +1333,7 @@ class Orchestrator:
         if checkpoint is None:
             if workspace.status().strip():
                 checkpoint_sha = workspace.checkpoint(
-                    f"runtime-checkpoint:{iteration.iteration_id}"
+                    _checkpoint_message(task.title, iteration.iteration_id)
                 )
             else:
                 checkpoint_sha = workspace.current_commit()
@@ -1616,6 +1616,12 @@ class Orchestrator:
             validation_summary=validation_summary,
             blockers=blockers,
         )
+
+
+def _checkpoint_message(task_title: str, iteration_id: str) -> str:
+    """Keep accepted task intent visible to planners in future sessions."""
+    title = " ".join(task_title.split())[:120] or "accepted task"
+    return f"runtime-checkpoint: {title} [{iteration_id}]"
 
 
 def _parse_changed_files(status: str) -> list[str]:

@@ -77,6 +77,8 @@ The runtime owns the Supervisor wire format. `SCOPE.md` and `AGENTS.md` define p
 
 Before requesting a task, the planner context includes a bounded snapshot of tracked and untracked paths, recent commit subjects, the current Git status and diff, and tasks completed in this session. The planner must compare that evidence with the milestones in `SCOPE.md`, skip work already present in the repository, and use a verification task when acceptance evidence is unclear.
 
+Runtime checkpoint subjects include a bounded version of the accepted task title so later sessions can use Git history to understand previously completed work.
+
 ```json
 {
   "schema_version": 1,

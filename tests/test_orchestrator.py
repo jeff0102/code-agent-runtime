@@ -6,7 +6,7 @@ from runtime.artifacts import ArtifactStore
 from runtime.models import SessionStatus, TaskStatus
 from runtime.openhands_executor import OpenHandsExecutionResult
 from runtime.openhands_supervisor import OpenHandsSupervisorResult
-from runtime.orchestrator import Orchestrator, OrchestratorConfig
+from runtime.orchestrator import Orchestrator, OrchestratorConfig, _checkpoint_message
 from runtime.protocol import (
     SupervisorDecision,
     SupervisorDecisionType,
@@ -88,6 +88,15 @@ def test_planner_prompt_uses_runtime_protocol_and_schema():
     assert "Do not include prose, markdown fences, or a wrapper object." in prompt
     assert "milestone preflight" in prompt
     assert "never require an existing tracked file to appear again in the diff" in prompt
+
+
+def test_checkpoint_message_preserves_a_bounded_task_title():
+    message = _checkpoint_message("  Add\n  persistence models  ", "iteration-1")
+
+    assert message == "runtime-checkpoint: Add persistence models [iteration-1]"
+    assert _checkpoint_message("x" * 200, "iteration-1").startswith(
+        "runtime-checkpoint: " + ("x" * 120)
+    )
 
 
 class FakeExecutor:
