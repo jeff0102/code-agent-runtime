@@ -65,10 +65,13 @@ class FallbackProfileManager:
         sdk: dict[str, Any],
         fallbacks: tuple[OpenHandsLLMFallbackConfig, ...],
         usage_prefix: str,
+        timeout: int,
     ) -> None:
         self._sdk = sdk
         self._fallbacks = fallbacks
         self._usage_prefix = usage_prefix
+        if timeout < 1:
+            raise ValueError("OpenHands timeout must be greater than zero")
         self._timeout = timeout
         self._profile_store_dir: TemporaryDirectory[str] | None = None
         self._profile_names: list[str] = []
