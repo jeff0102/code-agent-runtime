@@ -114,14 +114,14 @@ def test_adapter_reviews_and_controls_conversation():
 def test_adapter_enforces_timeout_and_interrupts():
     class SlowConversation(FakeConversation):
         def ask_agent(self, question):
-            threading.Event().wait(0.2)
+            threading.Event().wait(1.2)
             return self.response
 
     conversation = SlowConversation(
         '{"schema_version":1,"message_type":"supervisor_decision","decision":"ACCEPT","task_complete":true,'
         '"instructions":[],"blocking_reason":null}'
     )
-    adapter = OpenHandsSupervisorAdapter(conversation, timeout=0.01)
+    adapter = OpenHandsSupervisorAdapter(conversation, timeout=1)
 
     with pytest.raises(OpenHandsSupervisorError, match="timed out"):
         adapter.review("Review this implementation.")
