@@ -70,6 +70,27 @@ The runtime can execute a complete session without product-specific code:
 - Session state, events, artifacts, and OpenHands conversation identifiers are persisted outside the target repository.
 - Startup recovery can resume an interrupted Executor iteration and repair accepted checkpoint boundaries.
 
+### Supervisor planner protocol
+
+The runtime owns the Supervisor wire format. `SCOPE.md` and `AGENTS.md` define product requirements and repository guidance; they do not redefine this protocol. The planner returns one JSON object. For an actionable task, the canonical format is:
+
+```json
+{
+  "schema_version": 1,
+  "message_type": "supervisor_plan",
+  "action": "NEXT_TASK",
+  "title": "Add a health endpoint",
+  "objective": "Expose a deterministic health check.",
+  "instructions": "Implement GET /health and its focused test.",
+  "acceptance_criteria": "GET /health returns HTTP 200 with a healthy JSON response.",
+  "blocking_reason": null
+}
+```
+
+`instructions` and `acceptance_criteria` are strings in the canonical protocol. The adapter also converts observed `SupervisorTaskPlan` forms (`status: TASK` with task fields at the top level, and `status: READY` with a nested `task` object) into this format. In those forms, `scope` may provide task instructions when `instructions` is absent; list values become readable bullet lists. The adapter preserves `validation` and `constraints` as additional instructions. Unknown fields and unsupported statuses remain errors.
+
+For `DONE`, set `title`, `objective`, `instructions`, `acceptance_criteria`, and `blocking_reason` to `null`. For `BLOCK`, set the task fields to `null` and provide a non-empty `blocking_reason`.
+
 ### Local usage
 
 Install the package and OpenHands adapters:
