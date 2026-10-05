@@ -11,6 +11,7 @@ from runtime.openhands_fallback import (
     FallbackProfileManager,
     OpenHandsLLMFallbackConfig,
     build_llm_kwargs,
+    EXECUTOR_TIMEOUT_SECONDS,
 )
 
 
@@ -44,6 +45,7 @@ class OpenHandsExecutorConfig:
     base_url: str | None = None
     fallbacks: tuple[OpenHandsLLMFallbackConfig, ...] = ()
     max_iteration_per_run: int = 500
+    timeout: int = EXECUTOR_TIMEOUT_SECONDS
     persistence_dir: str | Path | None = None
 
     def __post_init__(self) -> None:
@@ -51,6 +53,8 @@ class OpenHandsExecutorConfig:
             raise ValueError("OpenHands model must not be empty")
         if self.max_iteration_per_run < 1:
             raise ValueError("max_iteration_per_run must be greater than zero")
+        if self.timeout < 1:
+            raise ValueError("timeout must be greater than zero")
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,12 +138,14 @@ class OpenHandsExecutorFactory:
                 sdk=sdk,
                 fallbacks=self.config.fallbacks,
                 usage_prefix="executor",
+                timeout=self.config.timeout,
             )
 
         llm_kwargs = build_llm_kwargs(
             model=self.config.model,
             api_key=self.config.api_key,
             base_url=self.config.base_url,
+            timeout=self.config.timeout,
         )
         if self._fallback_profiles is not None:
             strategy = self._fallback_profiles.strategy()
