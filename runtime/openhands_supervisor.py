@@ -12,6 +12,7 @@ from runtime.openhands_fallback import (
     FallbackProfileManager,
     OpenHandsLLMFallbackConfig,
     build_llm_kwargs,
+    SUPERVISOR_TIMEOUT_SECONDS,
 )
 from runtime.protocol import ProtocolError, SupervisorDecision, SupervisorPlan
 
@@ -34,11 +35,14 @@ class OpenHandsSupervisorConfig:
     api_key: str | None = None
     base_url: str | None = None
     fallbacks: tuple[OpenHandsLLMFallbackConfig, ...] = ()
+    timeout: int = SUPERVISOR_TIMEOUT_SECONDS
     persistence_dir: str | Path | None = None
 
     def __post_init__(self) -> None:
         if not self.model.strip():
             raise ValueError("OpenHands Supervisor model must not be empty")
+        if self.timeout < 1:
+            raise ValueError("timeout must be greater than zero")
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,12 +141,14 @@ class OpenHandsSupervisorFactory:
                 sdk=sdk,
                 fallbacks=self.config.fallbacks,
                 usage_prefix="supervisor",
+                timeout=self.config.timeout,
             )
 
         llm_kwargs = build_llm_kwargs(
             model=self.config.model,
             api_key=self.config.api_key,
             base_url=self.config.base_url,
+            timeout=self.config.timeout,
         )
         if self._fallback_profiles is not None:
             strategy = self._fallback_profiles.strategy()
