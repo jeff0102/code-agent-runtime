@@ -86,6 +86,8 @@ def test_planner_prompt_uses_runtime_protocol_and_schema():
     assert '"action":"NEXT_TASK"' in prompt
     assert "SupervisorTaskPlan JSON object" not in prompt
     assert "Do not include prose, markdown fences, or a wrapper object." in prompt
+    assert "milestone preflight" in prompt
+    assert "never require an existing tracked file to appear again in the diff" in prompt
 
 
 class FakeExecutor:
@@ -143,10 +145,12 @@ class FakeSupervisor:
         conversation_id: str,
         decisions: list[SupervisorDecision],
         plans: list[SupervisorPlan],
+        planning_prompts: list[str] | None = None,
     ):
         self._conversation_id = conversation_id
         self.decisions = decisions
         self.plans = plans
+        self.planning_prompts = planning_prompts if planning_prompts is not None else []
         self.closed = False
 
     @property
@@ -164,6 +168,7 @@ class FakeSupervisor:
     def plan(self, prompt: str):
         from runtime.openhands_supervisor import OpenHandsSupervisorPlanResult
 
+        self.planning_prompts.append(prompt)
         plan = self.plans.pop(0)
         return OpenHandsSupervisorPlanResult(
             conversation_id=self._conversation_id,
@@ -187,11 +192,17 @@ class FakeSupervisorFactory:
         self.decisions = decisions
         self.plans = plans or []
         self.calls: list[str | None] = []
+        self.planning_prompts: list[str] = []
 
     def create(self, *, reviewer_workspace, conversation_id=None):
         self.calls.append(conversation_id)
         next_id = conversation_id or f"supervisor-{len(self.calls)}"
-        return FakeSupervisor(next_id, self.decisions, self.plans)
+        return FakeSupervisor(
+            next_id,
+            self.decisions,
+            self.plans,
+            planning_prompts=self.planning_prompts,
+        )
 
 
 def accept_decision() -> SupervisorDecision:
@@ -488,6 +499,11 @@ def test_orchestrator_plans_first_task_when_session_has_no_current_task(tmp_path
     assert result.session_status is SessionStatus.DONE
     assert result.tasks_completed == 1
     assert len(store.list_tasks("session-1")) == 1
+    assert len(supervisor_factory.planning_prompts) == 2
+    first_plan_prompt = supervisor_factory.planning_prompts[0]
+    assert '"tracked_files": ["README.md", "SCOPE.md"]' in first_plan_prompt
+    assert '"recent_commits": ["' in first_plan_prompt
+    assert "initial" in first_plan_prompt
 
 
 def test_orchestrator_never_accepts_failed_required_validation(tmp_path):

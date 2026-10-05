@@ -29,6 +29,10 @@ class ContextLimits:
     validation_summary_chars: int = 4_000
     executor_report_chars: int = 8_000
     prior_decision_chars: int = 4_000
+    planner_inventory_entries: int = 500
+    planner_inventory_chars: int = 12_000
+    planner_history_entries: int = 20
+    planner_history_chars: int = 3_000
 
     def __post_init__(self) -> None:
         for name, value in asdict(self).items():
@@ -152,6 +156,9 @@ class PlannerContext:
     git: GitContext
     completed_tasks: list[dict[str, Any]]
     next_sequence: int
+    tracked_files: list[str]
+    untracked_files: list[str]
+    recent_commits: list[str]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -172,6 +179,11 @@ class PlannerContext:
             },
             "completed_tasks": list(self.completed_tasks),
             "next_sequence": self.next_sequence,
+            "repository_evidence": {
+                "tracked_files": list(self.tracked_files),
+                "untracked_files": list(self.untracked_files),
+                "recent_commits": list(self.recent_commits),
+            },
         }
 
     def to_json(self) -> str:
@@ -234,11 +246,50 @@ def build_planner_context(
     git: GitContext,
     completed_tasks: list[Task],
     next_sequence: int,
+    tracked_files: list[str] | None = None,
+    untracked_files: list[str] | None = None,
+    recent_commits: list[str] | None = None,
     limits: ContextLimits | None = None,
 ) -> PlannerContext:
     """Build a bounded context for selecting the next project task."""
     if next_sequence < 1:
         raise ContextError("next_sequence must be greater than zero")
+    limits = limits or ContextLimits()
+
+    def bounded_entries(
+        values: list[str] | None,
+        *,
+        count: int,
+        chars: int,
+    ) -> list[str]:
+        source = values or []
+        entries = [
+            _bounded_text(value, min(chars, 1_000)).strip()
+            for value in source[:count]
+        ]
+        result: list[str] = []
+        used = 0
+        for entry in entries:
+            if not entry:
+                continue
+            separator = 1 if result else 0
+            if used + separator + len(entry) > chars:
+                available = chars - used - separator
+                if available > 0:
+                    marker = "[TRUNCATED: planner evidence character limit reached]"
+                    result.append(marker[:available])
+                break
+            result.append(entry)
+            used += separator + len(entry)
+        else:
+            omitted = len(source) - len(entries)
+            if omitted:
+                marker = f"[TRUNCATED: {omitted} more entries omitted]"
+                available = chars - used - (1 if result else 0)
+                if available > 0:
+                    result.append(marker[:available])
+        return result
+
     return PlannerContext(
         repository=repository,
         session_id=session_id,
@@ -254,6 +305,21 @@ def build_planner_context(
             for task in completed_tasks
         ],
         next_sequence=next_sequence,
+        tracked_files=bounded_entries(
+            tracked_files,
+            count=limits.planner_inventory_entries,
+            chars=limits.planner_inventory_chars,
+        ),
+        untracked_files=bounded_entries(
+            untracked_files,
+            count=limits.planner_inventory_entries,
+            chars=limits.planner_inventory_chars,
+        ),
+        recent_commits=bounded_entries(
+            recent_commits,
+            count=limits.planner_history_entries,
+            chars=limits.planner_history_chars,
+        ),
     )
 
 

@@ -75,6 +75,28 @@ class GitWorkspace:
     def status(self) -> str:
         return self.run("status", "--porcelain=v1")
 
+    def tracked_files(self) -> list[str]:
+        """Return the repository's tracked paths for planning evidence."""
+        return [path for path in self.run("ls-files", "--cached").splitlines() if path]
+
+    def untracked_files(self) -> list[str]:
+        """Return non-ignored untracked paths for planning evidence."""
+        return [
+            path
+            for path in self.run("ls-files", "--others", "--exclude-standard").splitlines()
+            if path
+        ]
+
+    def recent_commits(self, limit: int = 20) -> list[str]:
+        """Return recent commit subjects as cross-session planning evidence."""
+        if limit < 1:
+            raise ValueError("limit must be greater than zero")
+        return [
+            line
+            for line in self.run("log", f"-{limit}", "--format=%h %s").splitlines()
+            if line
+        ]
+
     def unmerged_paths(self) -> list[str]:
         """Return paths Git still marks as conflicted."""
         output = self.run("diff", "--name-only", "--diff-filter=U")

@@ -5,6 +5,7 @@ from runtime.context import (
     ContextLimits,
     build_executor_context,
     build_git_context,
+    build_planner_context,
     build_scope_context,
     build_supervisor_context,
 )
@@ -142,6 +143,34 @@ def test_supervisor_context_contains_validation_and_executor_report():
     assert payload["validation"]["commands"][0]["name"] == "tests"
     assert payload["executor_report"]["summary"] == "Implemented the feature."
     assert payload["previous_decision"]["decision"] == "REVISE"
+
+
+def test_planner_context_includes_bounded_cross_session_repository_evidence():
+    scope = build_scope_context_for_text("milestones", scope_hash="hash")
+    git = build_git_context(make_snapshot(), base_commit="base")
+    context = build_planner_context(
+        repository="owner/repo",
+        session_id="session-1",
+        scope=scope,
+        git=git,
+        completed_tasks=[],
+        next_sequence=1,
+        tracked_files=["open_job_radar/app.py", "tests/test_health.py"],
+        untracked_files=["scratch.py"],
+        recent_commits=["c112c7f feat: add health endpoint"],
+        limits=ContextLimits(
+            planner_inventory_entries=1,
+            planner_inventory_chars=100,
+            planner_history_entries=1,
+            planner_history_chars=100,
+        ),
+    )
+
+    evidence = context.to_dict()["repository_evidence"]
+    assert evidence["tracked_files"][0] == "open_job_radar/app.py"
+    assert "TRUNCATED" in evidence["tracked_files"][1]
+    assert evidence["untracked_files"] == ["scratch.py"]
+    assert evidence["recent_commits"] == ["c112c7f feat: add health endpoint"]
 
 
 def test_large_diff_is_bounded_with_truncation_marker():

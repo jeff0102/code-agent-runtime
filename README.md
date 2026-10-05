@@ -75,6 +75,8 @@ The runtime can execute a complete session without product-specific code:
 
 The runtime owns the Supervisor wire format. `SCOPE.md` and `AGENTS.md` define product requirements and repository guidance; they do not redefine this protocol. The planner returns one JSON object. For an actionable task, the canonical format is:
 
+Before requesting a task, the planner context includes a bounded snapshot of tracked and untracked paths, recent commit subjects, the current Git status and diff, and tasks completed in this session. The planner must compare that evidence with the milestones in `SCOPE.md`, skip work already present in the repository, and use a verification task when acceptance evidence is unclear.
+
 ```json
 {
   "schema_version": 1,

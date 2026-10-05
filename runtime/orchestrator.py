@@ -1089,6 +1089,9 @@ class Orchestrator:
             ),
             completed_tasks=tasks,
             next_sequence=self.state.next_task_sequence(session_id),
+            tracked_files=workspace.tracked_files(),
+            untracked_files=workspace.untracked_files(),
+            recent_commits=workspace.recent_commits(),
             limits=self.config.context_limits,
         )
         supervisor = self.supervisor_factory.create(
@@ -1167,7 +1170,16 @@ class Orchestrator:
             "and BLOCK when safe progress cannot continue. "
             "For DONE, set title, objective, instructions, acceptance_criteria, and blocking_reason to null. "
             "For BLOCK, set those four task fields to null and provide blocking_reason as a string. "
-            "NEXT_TASK must be small, independently reviewable, and include concrete acceptance criteria.\n\n"
+            "Before selecting work, perform a milestone preflight against SCOPE.md using the repository "
+            "inventory, untracked files, recent commits, current Git diff, and completed session tasks. "
+            "Identify the earliest incomplete milestone and plan against its remaining acceptance criteria. "
+            "Treat the current Git diff as changes since HEAD, not as a list of all implemented files; "
+            "never require an existing tracked file to appear again in the diff. Do not repeat work already "
+            "present in the repository or accepted in earlier commits. If implementation exists but evidence "
+            "does not establish its acceptance criteria, plan a focused verification or gap-analysis task "
+            "instead of recreating it. State the milestone and concrete gap in each NEXT_TASK title, objective, "
+            "or instructions. NEXT_TASK must be small, independently reviewable, and include concrete "
+            "acceptance criteria.\n\n"
             "Planner context (JSON):\n"
             f"{context_json}"
         )
