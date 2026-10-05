@@ -102,7 +102,9 @@ OPENHANDS_EXECUTOR_FALLBACK_2_BASE_URL=
 
 The equivalent Supervisor variables use the `OPENHANDS_SUPERVISOR_FALLBACK_<N>_*` prefix.
 
-Fallbacks are tried in order only after the primary model fails with a transient error. Each new model call starts from the primary model again. The runtime uses a deliberately short retry policy: **3 total attempts per provider with 60 seconds between attempts**. After the primary provider exhausts its three attempts, the fallback strategy moves to the next configured provider. The same retry policy applies to each fallback provider. Fallback credentials are stored only in a temporary OpenHands profile directory and are not written into the runtime state database or artifacts.
+Fallbacks are tried in order after the primary provider fails. The runtime uses a deliberately short retry policy: **3 total attempts per provider with 60 seconds between attempts**.
+
+For the Executor, OpenHands' native fallback strategy handles provider failover inside one conversation. For the read-only Supervisor, each provider has its own conversation so the runtime can also fail over when the synchronous OpenHands call reaches the configured timeout; the successful provider's conversation ID is returned to the orchestrator. Supervisor fallback conversation state is stored only in a temporary directory, so fallback credentials do not enter the persistent runtime state or artifacts.
 
 The first run creates a persistent session and lets the Supervisor plan the first task. Re-running with `--session-id <id>` resumes the same session.
 
