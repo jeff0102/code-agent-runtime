@@ -65,6 +65,7 @@ The runtime can execute a complete session without product-specific code:
 - Deterministic validation runs after execution.
 - The Supervisor reviews the evidence and returns ACCEPT, REVISE, or BLOCK.
 - Accepted work is checkpointed by the runtime.
+- Remote publication is opt-in with `--enable-push`; the runtime integrates the configured remote target into the isolated session branch and performs only ordinary fast-forward pushes after acceptance.
 - REVISE creates another iteration for the same task.
 - After each accepted task, the Supervisor plans the next task or declares DONE.
 - Session state, events, artifacts, and OpenHands conversation identifiers are persisted outside the target repository.
@@ -108,6 +109,8 @@ code-agent-runtime \
   --supervisor-model gemini/gemini-3.8-flash \
   --validation tests::python -m pytest
 ```
+
+To enable automatic publication of accepted checkpoints, add `--enable-push`. The defaults are remote `origin` and target branch `main`; override them with `--git-remote` and `--target-branch`. The runtime fetches and merges the target branch into the session branch before implementation. It asks the Executor to resolve merge conflicts when needed, then requires validation and Supervisor acceptance before pushing. Pushes are normal fast-forward pushes; the runtime never force-pushes or asks the Executor to switch to the target branch.
 
 Fallbacks are configured independently for Executor and Supervisor through numbered environment variables. Any number of fallback slots may be supplied:
 

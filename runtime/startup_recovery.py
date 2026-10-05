@@ -106,6 +106,12 @@ class StartupRecovery:
         if pending_iteration is not None:
             base_commit = pending_iteration.base_commit
             active_iteration = True
+        elif task.status is TaskStatus.REVISION_REQUIRED:
+            # A runtime-owned integration retry may have a local checkpoint or
+            # merge in progress between iterations. Preserve it for the next
+            # Executor attempt instead of treating it as an unexplained commit.
+            base_commit = workspace.current_commit()
+            active_iteration = True
         elif latest_checkpoint is not None:
             base_commit = latest_checkpoint.commit_sha
             active_iteration = False
@@ -208,6 +214,8 @@ class StartupRecovery:
             )
 
         if latest_iteration.decision is not Decision.ACCEPT:
+            if latest_iteration.decision is not Decision.PENDING:
+                return None
             try:
                 self.state.complete_iteration(latest_iteration.iteration_id, Decision.ACCEPT)
             except StateError as exc:

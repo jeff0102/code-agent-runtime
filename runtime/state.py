@@ -635,6 +635,23 @@ class StateStore:
             failure_reason=row["failure_reason"],
         )
 
+    def update_pending_iteration_base_commit(
+        self,
+        iteration_id: str,
+        base_commit: str,
+    ) -> Iteration:
+        """Advance a pending iteration's base after runtime-owned remote sync."""
+        iteration = self.get_iteration(iteration_id)
+        if iteration.decision is not Decision.PENDING:
+            raise StateError("Only a pending iteration can change its base commit")
+        with self.connection() as connection:
+            connection.execute(
+                "UPDATE iterations SET base_commit = ? WHERE iteration_id = ?",
+                (base_commit, iteration_id),
+            )
+            connection.commit()
+        return self.get_iteration(iteration_id)
+
     def set_iteration_conversations(
         self,
         iteration_id: str,

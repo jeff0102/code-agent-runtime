@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from runtime.artifacts import ArtifactStore
+from runtime.git_integration import RemoteIntegrationConfig
 from runtime.openhands_executor import OpenHandsExecutorConfig, OpenHandsExecutorFactory
 from runtime.openhands_fallback import OpenHandsLLMFallbackConfig
 from runtime.openhands_supervisor import OpenHandsSupervisorConfig, OpenHandsSupervisorFactory
@@ -47,6 +48,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--executor-base-url", default=os.getenv("OPENHANDS_EXECUTOR_BASE_URL"))
     parser.add_argument("--supervisor-base-url", default=os.getenv("OPENHANDS_SUPERVISOR_BASE_URL"))
     parser.add_argument("--reviewer-workspace", type=Path)
+    parser.add_argument(
+        "--enable-push",
+        action="store_true",
+        help="After acceptance, fast-forward the configured remote target branch.",
+    )
+    parser.add_argument("--git-remote", default="origin")
+    parser.add_argument("--target-branch", default="main")
     return parser
 
 
@@ -129,6 +137,11 @@ def main(argv: list[str] | None = None) -> int:
             validation_commands=validations,
             reviewer_workspace=args.reviewer_workspace,
             max_tasks_per_session=args.max_tasks,
+            remote_integration=RemoteIntegrationConfig(
+                enabled=args.enable_push,
+                remote=args.git_remote,
+                target_branch=args.target_branch,
+            ),
         ),
     )
 
