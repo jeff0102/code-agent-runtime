@@ -285,9 +285,54 @@ def _normalize_supervisor_decision_payload(payload: dict[str, Any]) -> dict[str,
     elif decision == "REVISE":
         normalized.setdefault("task_complete", False)
         normalized.setdefault("blocking_reason", None)
+        summary = normalized.pop("summary", None)
+        rationale = normalized.pop("rationale", None)
+        required_revisions = normalized.pop("required_revisions", None)
+
+        instructions = normalized.get("instructions")
+        if instructions is None:
+            instructions = []
+        if not isinstance(instructions, list):
+            return normalized
+
+        context: list[str] = []
+        if summary is not None:
+            if not isinstance(summary, str) or not summary.strip():
+                raise ProtocolError("SupervisorDecision summary must be a non-empty string")
+            context.append("Review summary: " + summary.strip())
+        if rationale is not None:
+            if (
+                not isinstance(rationale, list)
+                or any(not isinstance(item, str) or not item.strip() for item in rationale)
+            ):
+                raise ProtocolError("SupervisorDecision rationale must be a list of non-empty strings")
+            context.append(
+                "Rationale:\n" + "\n".join(f"- {item.strip()}" for item in rationale)
+            )
+        if required_revisions is not None:
+            if (
+                not isinstance(required_revisions, list)
+                or any(
+                    not isinstance(item, str) or not item.strip()
+                    for item in required_revisions
+                )
+            ):
+                raise ProtocolError(
+                    "SupervisorDecision required_revisions must be a list of non-empty strings"
+                )
+            if not instructions:
+                instructions = []
+            if not isinstance(instructions, list):
+                return normalized
+            instructions.extend(item.strip() for item in required_revisions)
+
+        if context and instructions:
+            instructions = context + instructions
+        normalized["instructions"] = instructions
     elif decision == "BLOCK":
         normalized.setdefault("task_complete", False)
 
+    normalized.setdefault("instructions", [])
     return normalized
 
 

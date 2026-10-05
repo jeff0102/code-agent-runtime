@@ -86,6 +86,25 @@ def test_parse_supervisor_decision_rejects_invalid_json():
     with pytest.raises(Exception):
         parse_supervisor_decision("not json")
 
+def test_parse_supervisor_decision_accept_defaults_missing_instructions():
+    decision = parse_supervisor_decision(
+        '{"decision":"ACCEPT","task_complete":true,"blocking_reason":null}'
+    )
+    assert decision.decision is SupervisorDecisionType.ACCEPT
+    assert decision.instructions == []
+
+
+def test_parse_supervisor_decision_maps_required_revisions_to_instructions():
+    decision = parse_supervisor_decision(
+        '{"decision":"REVISE","summary":"Evidence is incomplete.",'
+        '"rationale":["The endpoint test was not reported."],'
+        '"required_revisions":["Run the endpoint test and report its result."]}'
+    )
+    assert decision.decision is SupervisorDecisionType.REVISE
+    assert decision.instructions[-1] == "Run the endpoint test and report its result."
+    assert "Evidence is incomplete." in decision.instructions[0]
+    assert "The endpoint test was not reported." in decision.instructions[1]
+
 @pytest.mark.parametrize(
     "payload,expected,complete",
     [
