@@ -7,6 +7,8 @@ from runtime.openhands_fallback import (
     LLM_RETRY_ATTEMPTS,
     LLM_RETRY_MULTIPLIER,
     LLM_RETRY_WAIT_SECONDS,
+    EXECUTOR_TIMEOUT_SECONDS,
+    SUPERVISOR_TIMEOUT_SECONDS,
     OpenHandsLLMFallbackConfig,
     build_llm_kwargs,
 )
@@ -47,12 +49,14 @@ def test_build_llm_kwargs_sets_fast_retry_policy():
         model="gemini/gemini-3.8-flash",
         api_key=None,
         base_url=None,
+        timeout=SUPERVISOR_TIMEOUT_SECONDS,
     ) == {
         "model": "gemini/gemini-3.8-flash",
         "num_retries": LLM_RETRY_ATTEMPTS,
         "retry_min_wait": LLM_RETRY_WAIT_SECONDS,
         "retry_max_wait": LLM_RETRY_WAIT_SECONDS,
         "retry_multiplier": LLM_RETRY_MULTIPLIER,
+        "timeout": SUPERVISOR_TIMEOUT_SECONDS,
     }
 
 
@@ -61,6 +65,7 @@ def test_build_llm_kwargs_preserves_configured_values():
         model="xai/grok-4.7",
         api_key="sk-dummy",
         base_url="https://api.x.ai/v1",
+        timeout=EXECUTOR_TIMEOUT_SECONDS,
     )
 
     assert kwargs["model"] == "xai/grok-4.7"
@@ -69,6 +74,7 @@ def test_build_llm_kwargs_preserves_configured_values():
     assert kwargs["num_retries"] == 3
     assert kwargs["retry_min_wait"] == 60
     assert kwargs["retry_max_wait"] == 60
+    assert kwargs["timeout"] == EXECUTOR_TIMEOUT_SECONDS
 
 
 def test_fallback_manager_builds_ordered_profiles_without_persisting_to_state(
@@ -90,6 +96,7 @@ def test_fallback_manager_builds_ordered_profiles_without_persisting_to_state(
             ),
         ),
         usage_prefix="executor",
+        timeout=EXECUTOR_TIMEOUT_SECONDS,
     )
 
     store = FakeProfileStore.created[-1]
@@ -103,6 +110,7 @@ def test_fallback_manager_builds_ordered_profiles_without_persisting_to_state(
         item[1].kwargs["num_retries"] == LLM_RETRY_ATTEMPTS
         and item[1].kwargs["retry_min_wait"] == LLM_RETRY_WAIT_SECONDS
         and item[1].kwargs["retry_max_wait"] == LLM_RETRY_WAIT_SECONDS
+        and item[1].kwargs["timeout"] == EXECUTOR_TIMEOUT_SECONDS
         for item in store.saved
     )
 
