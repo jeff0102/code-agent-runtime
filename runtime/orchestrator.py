@@ -466,6 +466,18 @@ class Orchestrator:
 
         previous_revision_instructions: list[str] = []
         previous_decision: SupervisorDecision | None = None
+        for event in reversed(self.state.list_events(session_id)):
+            if (
+                event["task_id"] == task_id
+                and event["event_type"] == "SUPERVISOR_DECISION"
+            ):
+                last_decision = SupervisorDecision.from_dict(
+                    event["payload"]["decision"]
+                )
+                if last_decision.decision is SupervisorDecisionType.REVISE:
+                    previous_decision = last_decision
+                    previous_revision_instructions = list(last_decision.instructions)
+                break
 
         while True:
             session = self.state.get_session(session_id)
@@ -738,6 +750,9 @@ class Orchestrator:
                     validation=validation,
                     executor_report=executor_report,
                     changed_files=executor_report.changed_files,
+                    tracked_files=workspace.tracked_files(),
+                    untracked_files=workspace.untracked_files(),
+                    recent_commits=workspace.recent_commits(),
                     previous_decision=previous_decision,
                     limits=self.config.context_limits,
                 )
@@ -753,6 +768,22 @@ class Orchestrator:
                 )
                 supervisor_prompt = self._supervisor_prompt(
                     supervisor_context.to_json()
+                )
+                context_path, context_hash, context_size = self.artifact_store.write_text(
+                    session_id,
+                    task_id,
+                    iteration.iteration_id,
+                    "supervisor-context.json",
+                    supervisor_context.to_json(),
+                )
+                self.state.record_artifact(
+                    session_id,
+                    "supervisor-context",
+                    context_path,
+                    context_hash,
+                    context_size,
+                    task_id=task_id,
+                    iteration_id=iteration.iteration_id,
                 )
                 self.state.append_event(
                     session_id,
@@ -804,6 +835,22 @@ class Orchestrator:
                     iteration.iteration_id,
                     execution.conversation_id,
                     review.conversation_id,
+                )
+                raw_path, raw_hash, raw_size = self.artifact_store.write_text(
+                    session_id,
+                    task_id,
+                    iteration.iteration_id,
+                    "supervisor-decision-response-raw.txt",
+                    review.raw_response,
+                )
+                self.state.record_artifact(
+                    session_id,
+                    "supervisor_decision_response_raw",
+                    raw_path,
+                    raw_hash,
+                    raw_size,
+                    task_id=task_id,
+                    iteration_id=iteration.iteration_id,
                 )
                 self.state.append_event(
                     session_id,
@@ -863,6 +910,40 @@ class Orchestrator:
                         {
                             "original_decision": review.decision.to_dict(),
                             "reasons": gate_reasons,
+                        },
+                    )
+
+                repeated_no_progress = (
+                    effective_decision.decision is SupervisorDecisionType.REVISE
+                    and previous_decision is not None
+                    and previous_decision.decision is SupervisorDecisionType.REVISE
+                    and previous_decision.instructions == effective_decision.instructions
+                    and not executor_report.changed_files
+                    and not snapshot.diff.strip()
+                )
+                if repeated_no_progress:
+                    reason = (
+                        "The Supervisor repeated the same revision instructions, but the "
+                        "Executor produced no workspace changes. The runtime stopped this "
+                        "no-progress loop; review the saved Supervisor and Executor "
+                        "artifacts, then update the task or provide missing evidence."
+                    )
+                    effective_decision = SupervisorDecision(
+                        decision=SupervisorDecisionType.BLOCK,
+                        task_complete=False,
+                        instructions=[],
+                        blocking_reason=reason,
+                    )
+                    self.state.append_event(
+                        session_id,
+                        task_id,
+                        iteration.iteration_id,
+                        "SUPERVISOR_REPEATED_REVISION_BLOCKED",
+                        {
+                            "reason": reason,
+                            "repeated_instructions": list(previous_decision.instructions),
+                            "changed_files": executor_report.changed_files,
+                            "diff_empty": not snapshot.diff.strip(),
                         },
                     )
 
@@ -1024,7 +1105,7 @@ class Orchestrator:
                         task_status=TaskStatus.BLOCKED,
                         session_status=self.state.get_session(session_id).status,
                         iterations=self.state.get_task(task_id).attempt_count,
-                        failure_reason=review.decision.blocking_reason,
+                        failure_reason=effective_decision.blocking_reason,
                     )
 
                 if self.state.get_task(task_id).attempt_count >= session.max_iterations:
@@ -1480,7 +1561,12 @@ class Orchestrator:
             "You are the only agent allowed to modify source files. "
             "Stay within SCOPE.md and AGENTS.md. Implement the task, run the "
             "available validation commands when practical, and stop when the "
-            "task is complete or you are blocked.\n\n"
+            "task is complete or you are blocked. For verification or audit tasks, "
+            "inspect the existing implementation and report concrete evidence for "
+            "each acceptance criterion, including relevant file paths and validation "
+            "results. Existing work may already satisfy the task: do not recreate it, "
+            "and do not modify files solely to produce a diff. State explicitly when "
+            "no changes are needed and identify any criterion that remains unverified.\n\n"
             f"{integration_guidance}"
             "Executor context (JSON):\n"
             f"{context_json}"
@@ -1491,6 +1577,14 @@ class Orchestrator:
         return (
             "Review the Executor work as a read-only Supervisor. "
             "Use only supplied evidence and do not modify any repository. "
+            "For verification or audit tasks, evaluate each acceptance criterion "
+            "against the tracked-file inventory, recent commits, current diff, changed "
+            "files, and validation results. The current diff contains only changes "
+            "from this task attempt; an empty diff does not imply that existing work "
+            "is missing. Do not request recreation of already tracked or committed "
+            "implementation. Accept a no-change verification when the supplied "
+            "evidence substantiates all criteria; otherwise name the specific missing "
+            "evidence or unmet criterion. "
             "Return exactly one JSON object with every field present and this exact schema: "
             "{\"schema_version\":1,\"message_type\":\"supervisor_decision\","
             "\"decision\":\"ACCEPT|REVISE|BLOCK\",\"task_complete\":false,"
@@ -1608,8 +1702,12 @@ class Orchestrator:
         return ExecutorReport(
             status=status,
             summary=(
-                "OpenHands Executor completed the run; runtime generated the "
-                "report from execution state and workspace evidence."
+                "OpenHands Executor completed without workspace changes; this may be "
+                "an intentional verification-only result. Review existing repository "
+                "evidence and acceptance criteria."
+                if not changed_files and not snapshot.diff.strip()
+                else "OpenHands Executor completed; review changed_files and supplied "
+                "validation results against the acceptance criteria."
             ),
             changed_files=changed_files,
             tests_executed=tests,

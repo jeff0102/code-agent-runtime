@@ -33,6 +33,10 @@ class ContextLimits:
     planner_inventory_chars: int = 12_000
     planner_history_entries: int = 20
     planner_history_chars: int = 3_000
+    supervisor_repository_inventory_entries: int = 500
+    supervisor_repository_inventory_chars: int = 12_000
+    supervisor_repository_history_entries: int = 20
+    supervisor_repository_history_chars: int = 3_000
 
     def __post_init__(self) -> None:
         for name, value in asdict(self).items():
@@ -110,6 +114,7 @@ class SupervisorContext:
     scope: ScopeContext
     git: GitContext
     changed_files: list[str]
+    repository_evidence: dict[str, list[str]]
     validation: dict[str, Any]
     executor_report: dict[str, Any] | None
     previous_decision: dict[str, Any] | None
@@ -134,6 +139,7 @@ class SupervisorContext:
                 "diff": self.git.diff,
             },
             "changed_files": list(self.changed_files),
+            "repository_evidence": self.repository_evidence,
             "validation": self.validation,
             "executor_report": self.executor_report,
             "previous_decision": self.previous_decision,
@@ -359,11 +365,32 @@ def build_supervisor_context(
     validation: ValidationResult,
     executor_report: ExecutorReport | None,
     changed_files: list[str] | None = None,
+    tracked_files: list[str] | None = None,
+    untracked_files: list[str] | None = None,
+    recent_commits: list[str] | None = None,
     previous_decision: SupervisorDecision | None = None,
     limits: ContextLimits | None = None,
 ) -> SupervisorContext:
     """Build the read-only review context for a Supervisor attempt."""
     limits = limits or ContextLimits()
+
+    repository_evidence = {
+        "tracked_files": _bounded_entries(
+            tracked_files,
+            count=limits.supervisor_repository_inventory_entries,
+            chars=limits.supervisor_repository_inventory_chars,
+        ),
+        "untracked_files": _bounded_entries(
+            untracked_files,
+            count=limits.supervisor_repository_inventory_entries,
+            chars=limits.supervisor_repository_inventory_chars,
+        ),
+        "recent_commits": _bounded_entries(
+            recent_commits,
+            count=limits.supervisor_repository_history_entries,
+            chars=limits.supervisor_repository_history_chars,
+        ),
+    }
 
     validation_dict = _validation_dict(validation)
     validation_json = json.dumps(validation_dict, sort_keys=True, ensure_ascii=False)
@@ -415,10 +442,44 @@ def build_supervisor_context(
             if changed_files is not None
             else list(executor_report.changed_files if executor_report else [])
         ),
+        repository_evidence=repository_evidence,
         validation=validation_dict,
         executor_report=report_dict,
         previous_decision=decision_dict,
     )
+
+
+def _bounded_entries(
+    values: list[str] | None,
+    *,
+    count: int,
+    chars: int,
+) -> list[str]:
+    """Bound repository evidence by entry count and total serialized text size."""
+    source = values or []
+    entries = [_bounded_text(value, min(chars, 1_000)).strip() for value in source[:count]]
+    result: list[str] = []
+    used = 0
+    for entry in entries:
+        if not entry:
+            continue
+        separator = 1 if result else 0
+        if used + separator + len(entry) > chars:
+            marker = "[TRUNCATED: repository evidence character limit reached]"
+            available = chars - used - separator
+            if available > 0:
+                result.append(marker[:available])
+            break
+        result.append(entry)
+        used += separator + len(entry)
+    else:
+        omitted = len(source) - len(entries)
+        if omitted:
+            marker = f"[TRUNCATED: {omitted} more entries omitted]"
+            available = chars - used - (1 if result else 0)
+            if available > 0:
+                result.append(marker[:available])
+    return result
 
 
 def _task_dict(task: Task) -> dict[str, Any]:
