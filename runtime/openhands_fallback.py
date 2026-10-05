@@ -28,6 +28,16 @@ class OpenHandsLLMFallbackConfig:
             raise ValueError("OpenHands fallback model must not be empty")
 
 
+def _supports_prompt_cache_key(*, model: str, base_url: str | None) -> bool | None:
+    """Return an explicit prompt-cache capability override for known endpoints."""
+    normalized_base_url = (base_url or "").rstrip("/").lower()
+    if model.startswith("openai/gemini-") and (
+        "generativelanguage.googleapis.com" in normalized_base_url
+    ):
+        return False
+    return None
+
+
 def build_llm_kwargs(
     *,
     model: str,
@@ -49,6 +59,14 @@ def build_llm_kwargs(
         "retry_multiplier": LLM_RETRY_MULTIPLIER,
         "timeout": timeout,
     }
+    prompt_cache_key_support = _supports_prompt_cache_key(
+        model=model,
+        base_url=base_url,
+    )
+    if prompt_cache_key_support is not None:
+        kwargs["capability_overrides"] = {
+            "supports_prompt_cache_key": prompt_cache_key_support
+        }
     if api_key is not None:
         kwargs["api_key"] = api_key
     if base_url is not None:
