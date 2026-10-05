@@ -173,6 +173,51 @@ def test_parse_supervisor_plan_accepts_next_task():
     assert plan.title == "Add configuration loader"
 
 
+@pytest.mark.parametrize(
+    "payload,expected_instruction,expected_detail",
+    [
+        (
+            '{"type":"SupervisorTaskPlan","status":"TASK","task_id":"one",'
+            '"title":"Bootstrap","objective":"Start app",'
+            '"instructions":["Create the app."],"acceptance_criteria":["Tests pass."],'
+            '"validation":["Run focused tests."],"constraints":["Skip deployment."]}',
+            "- Create the app.",
+            "Validation:\n- Run focused tests.",
+        ),
+        (
+            '{"type":"SupervisorTaskPlan","status":"READY","task":{'
+            '"title":"Bootstrap","objective":"Start app",'
+            '"scope":["Add FastAPI app.","Expose GET /health."],'
+            '"acceptance_criteria":["Health returns 200."],'
+            '"validation":["Run focused tests."]}}',
+            "- Add FastAPI app.\n- Expose GET /health.",
+            "Validation:\n- Run focused tests.",
+        ),
+    ],
+)
+def test_parse_supervisor_task_plan_variants(payload, expected_instruction, expected_detail):
+    plan = parse_supervisor_plan(payload)
+    assert plan.title == "Bootstrap"
+    assert expected_instruction in plan.instructions
+    assert expected_detail in plan.instructions
+    assert plan.acceptance_criteria
+
+
+def test_parse_supervisor_task_plan_accepts_latest_nested_scope_shape():
+    payload = (
+        '{"type":"SupervisorTaskPlan","status":"READY","task":{'
+        '"title":"Implement the minimal FastAPI health endpoint",'
+        '"objective":"Establish the first runnable bootstrap slice.",'
+        '"scope":["Add the smallest reasonable FastAPI application structure.",'
+        '"Expose a GET /health endpoint returning a stable success response."],'
+        '"acceptance_criteria":["The application starts.","GET /health succeeds."],'
+        '"validation":["Run focused tests."]}}'
+    )
+    plan = parse_supervisor_plan(payload)
+    assert plan.title == "Implement the minimal FastAPI health endpoint"
+    assert "GET /health" in plan.instructions
+
+
 def test_adapter_plans_next_task():
     response = (
         '{"schema_version":1,"message_type":"supervisor_plan","action":"NEXT_TASK",'

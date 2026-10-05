@@ -74,6 +74,13 @@ def create_runtime(tmp_path: Path, *, max_iterations: int = 3, branch: str = "ma
     artifacts = ArtifactStore(tmp_path / "artifacts")
     return repo, store, artifacts
 
+def test_planner_prompt_uses_runtime_protocol_and_schema():
+    prompt = Orchestrator._planner_prompt("{}")
+    assert '"message_type":"supervisor_plan"' in prompt
+    assert '"action":"NEXT_TASK"' in prompt
+    assert "SupervisorTaskPlan JSON object" not in prompt
+    assert "Do not include prose, markdown fences, or a wrapper object." in prompt
+
 
 class FakeExecutor:
     def __init__(self, repo: Path, conversation_id: str, contents: list[str]):

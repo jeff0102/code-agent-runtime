@@ -19,7 +19,11 @@ from runtime.context import (
 from runtime.lease import WorkspaceLease
 from runtime.models import Decision, Session, SessionStatus, TaskStatus
 from runtime.openhands_executor import OpenHandsExecutionResult
-from runtime.openhands_supervisor import OpenHandsSupervisorPlanResult, OpenHandsSupervisorResult
+from runtime.openhands_supervisor import (
+    OpenHandsSupervisorError,
+    OpenHandsSupervisorPlanResult,
+    OpenHandsSupervisorResult,
+)
 from runtime.protocol import (
     ExecutorReport,
     ExecutorStatus,
@@ -859,6 +863,38 @@ class Orchestrator:
         )
         try:
             result = supervisor.plan(self._planner_prompt(planner_context.to_json()))
+        except OpenHandsSupervisorError as exc:
+            if exc.raw_response is not None:
+                raw_path, raw_hash, raw_size = self.artifact_store.write_text(
+                    session_id,
+                    "planning",
+                    supervisor.conversation_id,
+                    "supervisor-plan-response-raw.txt",
+                    exc.raw_response,
+                )
+                self.state.record_artifact(
+                    session_id,
+                    "supervisor_plan_response_raw",
+                    raw_path,
+                    raw_hash,
+                    raw_size,
+                )
+                self.state.append_event(
+                    session_id,
+                    None,
+                    None,
+                    "SUPERVISOR_PLANNING_RAW_RESPONSE_SAVED",
+                    {
+                        "conversation_id": supervisor.conversation_id,
+                        "path": raw_path,
+                        "sha256": raw_hash,
+                        "size_bytes": raw_size,
+                    },
+                )
+                raise RuntimeError(
+                    f"{exc}; raw response saved to {raw_path}"
+                ) from exc
+            raise
         finally:
             supervisor.close()
 
@@ -881,9 +917,15 @@ class Orchestrator:
             "You are the planning Supervisor for an autonomous software development runtime. "
             "Review only the supplied repository evidence. Do not modify files. "
             "Determine the next atomic implementation task required to satisfy SCOPE.md. "
-            "Return exactly one SupervisorPlan JSON object. "
+            "Return only one JSON object matching this exact schema, with every key present: "
+            "{\"schema_version\":1,\"message_type\":\"supervisor_plan\",\"action\":\"NEXT_TASK\","
+            "\"title\":\"...\",\"objective\":\"...\",\"instructions\":\"...\","
+            "\"acceptance_criteria\":\"...\",\"blocking_reason\":null}. "
+            "Do not include prose, markdown fences, or a wrapper object. "
             "Use NEXT_TASK when actionable work remains, DONE only when the entire scope is satisfied, "
             "and BLOCK when safe progress cannot continue. "
+            "For DONE, set title, objective, instructions, acceptance_criteria, and blocking_reason to null. "
+            "For BLOCK, set those four task fields to null and provide blocking_reason as a string. "
             "NEXT_TASK must be small, independently reviewable, and include concrete acceptance criteria.\n\n"
             "Planner context (JSON):\n"
             f"{context_json}"
@@ -1078,20 +1120,6 @@ class Orchestrator:
     def _latest_checkpoint_sha(self, session_id: str) -> str | None:
         checkpoint = self.state.latest_checkpoint(session_id)
         return checkpoint.commit_sha if checkpoint is not None else None
-
-    @staticmethod
-    def _planner_prompt(context_json: str) -> str:
-        return (
-            "You are the read-only Supervisor planning the next implementation "
-            "task for an autonomous coding session. Review SCOPE.md, AGENTS.md, "
-            "Git evidence, and completed tasks. Return exactly one "
-            "SupervisorTaskPlan JSON object. Create one atomic next task only "
-            "when useful work remains. Return DONE only when the entire scope "
-            "is satisfied. Return BLOCK when safe progress cannot continue. "
-            "Do not modify files.\n\n"
-            "Planning context (JSON):\n"
-            f"{context_json}"
-        )
 
     @staticmethod
     def _executor_prompt(context_json: str) -> str:

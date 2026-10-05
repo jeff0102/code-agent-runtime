@@ -14,11 +14,20 @@ from runtime.openhands_fallback import (
     build_llm_kwargs,
     SUPERVISOR_TIMEOUT_SECONDS,
 )
-from runtime.protocol import ProtocolError, SupervisorDecision, SupervisorPlan
+from runtime.protocol import (
+    SCHEMA_VERSION,
+    ProtocolError,
+    SupervisorDecision,
+    SupervisorPlan,
+)
 
 
 class OpenHandsSupervisorError(RuntimeError):
     """Raised when a Supervisor review cannot be completed."""
+
+    def __init__(self, message: str, *, raw_response: str | None = None) -> None:
+        super().__init__(message)
+        self.raw_response = raw_response
 
 
 class SupervisorConversationLike(Protocol):
@@ -93,16 +102,19 @@ class OpenHandsSupervisorAdapter:
         if not prompt.strip():
             raise ValueError("Supervisor plan prompt must not be empty")
 
+        raw_response: str | None = None
         try:
             raw_response = self._conversation.ask_agent(prompt)
             plan = parse_supervisor_plan(raw_response)
         except (ProtocolError, ValueError) as exc:
             raise OpenHandsSupervisorError(
-                f"Supervisor returned an invalid plan: {exc}"
+                f"Supervisor returned an invalid plan: {exc}",
+                raw_response=raw_response,
             ) from exc
         except Exception as exc:
             raise OpenHandsSupervisorError(
-                f"OpenHands Supervisor planning failed: {exc}"
+                f"OpenHands Supervisor planning failed: {exc}",
+                raw_response=raw_response,
             ) from exc
 
         return OpenHandsSupervisorPlanResult(
@@ -254,4 +266,163 @@ def parse_supervisor_plan(response: str) -> SupervisorPlan:
             f"Supervisor plan response was not valid JSON: {exc}"
         ) from exc
 
+    if isinstance(payload, dict):
+        if payload.get("type") == "SupervisorTaskPlan":
+            payload = _convert_supervisor_task_plan(payload)
+        else:
+            payload = _normalize_supervisor_plan_payload(payload)
     return SupervisorPlan.from_dict(payload)
+
+
+def _convert_supervisor_task_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    """Convert the observed alternate task-plan shapes to the runtime contract."""
+    allowed_top_keys = {
+        "type",
+        "status",
+        "task_id",
+        "title",
+        "objective",
+        "instructions",
+        "scope",
+        "acceptance_criteria",
+        "validation",
+        "constraints",
+        "task",
+    }
+    unknown = set(payload) - allowed_top_keys
+    if unknown:
+        raise ProtocolError(
+            f"SupervisorTaskPlan contains unknown fields: {sorted(unknown)}"
+        )
+
+    status = payload.get("status")
+    task = payload.get("task")
+    if task is not None:
+        if status != "READY":
+            raise ProtocolError(
+                f"Nested SupervisorTaskPlan requires READY status; got {status!r}"
+            )
+        if not isinstance(task, dict):
+            raise ProtocolError("SupervisorTaskPlan task must be a JSON object")
+        task_keys = {
+            "task_id",
+            "title",
+            "objective",
+            "instructions",
+            "scope",
+            "acceptance_criteria",
+            "validation",
+            "constraints",
+        }
+        task_unknown = set(task) - task_keys
+        if task_unknown:
+            raise ProtocolError(
+                f"SupervisorTaskPlan task contains unknown fields: {sorted(task_unknown)}"
+            )
+        task_data = task
+    elif status == "TASK":
+        task_data = payload
+    else:
+        raise ProtocolError(f"Unsupported SupervisorTaskPlan status: {status!r}")
+
+    required = {"title", "objective", "acceptance_criteria"}
+    missing = required - set(task_data)
+    if missing:
+        raise ProtocolError(
+            f"SupervisorTaskPlan task is missing fields: {sorted(missing)}"
+        )
+
+    title = _require_plan_text(task_data["title"], "title")
+    objective = _require_plan_text(task_data["objective"], "objective")
+    instruction_values: list[str] = []
+    if "instructions" in task_data:
+        instruction_values.append(
+            _require_plan_text(task_data["instructions"], "instructions")
+        )
+    if "scope" in task_data:
+        instruction_values.append(_require_plan_text(task_data["scope"], "scope"))
+    if not instruction_values:
+        raise ProtocolError(
+            "SupervisorTaskPlan task is missing fields: ['instructions' or 'scope']"
+        )
+    instructions = "\n\n".join(instruction_values)
+    acceptance_criteria = _require_plan_text(
+        task_data["acceptance_criteria"], "acceptance_criteria"
+    )
+
+    extra_instructions: list[str] = []
+    task_id = task_data.get("task_id", payload.get("task_id"))
+    if task_id is not None:
+        task_id_text = _require_plan_text(task_id, "task_id")
+        extra_instructions.append("Planner task ID: " + task_id_text)
+    for field in ("validation", "constraints"):
+        detail_value = task_data.get(field, payload.get(field))
+        if detail_value is not None:
+            detail = _require_plan_text(detail_value, field, allow_empty_list=True)
+            if detail:
+                extra_instructions.append(f"{field.title()}:\n{detail}")
+    if extra_instructions:
+        instructions = instructions + "\n\n" + "\n\n".join(extra_instructions)
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "message_type": "supervisor_plan",
+        "action": "NEXT_TASK",
+        "title": title,
+        "objective": objective,
+        "instructions": instructions,
+        "acceptance_criteria": acceptance_criteria,
+        "blocking_reason": None,
+    }
+
+
+def _require_plan_text(value: Any, field: str, *, allow_empty_list: bool = False) -> str:
+    if isinstance(value, str):
+        if value.strip():
+            return value.strip()
+        if allow_empty_list:
+            return ""
+    elif isinstance(value, list):
+        if not value and allow_empty_list:
+            return ""
+        if value and all(isinstance(item, str) and item.strip() for item in value):
+            return "\n".join(f"- {item.strip()}" for item in value)
+    raise ProtocolError(
+        f"{field} must be a non-empty string or list of non-empty strings"
+    )
+
+
+def _normalize_supervisor_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Fill unambiguous protocol metadata omitted by some model responses."""
+    normalized = dict(payload)
+    expected_keys = {
+        "schema_version",
+        "message_type",
+        "action",
+        "title",
+        "objective",
+        "instructions",
+        "acceptance_criteria",
+        "blocking_reason",
+    }
+    if set(normalized) - expected_keys:
+        return normalized
+
+    normalized.setdefault("schema_version", SCHEMA_VERSION)
+    normalized.setdefault("message_type", "supervisor_plan")
+
+    task_fields = (
+        "title",
+        "objective",
+        "instructions",
+        "acceptance_criteria",
+    )
+    if "action" not in normalized and all(
+        isinstance(normalized.get(field), str) and normalized[field].strip()
+        for field in task_fields
+    ):
+        normalized["action"] = "NEXT_TASK"
+
+    if normalized.get("action") == "NEXT_TASK":
+        normalized.setdefault("blocking_reason", None)
+    return normalized
