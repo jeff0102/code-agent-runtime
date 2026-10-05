@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
+from queue import Queue
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -60,8 +62,16 @@ class OpenHandsSupervisorPlanResult:
 
 
 class OpenHandsSupervisorAdapter:
-    def __init__(self, conversation: SupervisorConversationLike) -> None:
+    def __init__(
+        self,
+        conversation: SupervisorConversationLike,
+        *,
+        timeout: int = SUPERVISOR_TIMEOUT_SECONDS,
+    ) -> None:
+        if timeout < 1:
+            raise ValueError("timeout must be greater than zero")
         self._conversation = conversation
+        self._timeout = timeout
 
     @property
     def conversation_id(self) -> str:
@@ -72,12 +82,14 @@ class OpenHandsSupervisorAdapter:
             raise ValueError("Supervisor review prompt must not be empty")
 
         try:
-            raw_response = self._conversation.ask_agent(prompt)
+            raw_response = self._ask_agent_with_timeout(prompt)
             decision = parse_supervisor_decision(raw_response)
         except (ProtocolError, ValueError) as exc:
             raise OpenHandsSupervisorError(
                 f"Supervisor returned an invalid decision: {exc}"
             ) from exc
+        except OpenHandsSupervisorError:
+            raise
         except Exception as exc:
             raise OpenHandsSupervisorError(
                 f"OpenHands Supervisor review failed: {exc}"
@@ -94,12 +106,14 @@ class OpenHandsSupervisorAdapter:
             raise ValueError("Supervisor plan prompt must not be empty")
 
         try:
-            raw_response = self._conversation.ask_agent(prompt)
+            raw_response = self._ask_agent_with_timeout(prompt)
             plan = parse_supervisor_plan(raw_response)
         except (ProtocolError, ValueError) as exc:
             raise OpenHandsSupervisorError(
                 f"Supervisor returned an invalid plan: {exc}"
             ) from exc
+        except OpenHandsSupervisorError:
+            raise
         except Exception as exc:
             raise OpenHandsSupervisorError(
                 f"OpenHands Supervisor planning failed: {exc}"
@@ -110,6 +124,40 @@ class OpenHandsSupervisorAdapter:
             plan=plan,
             raw_response=raw_response,
         )
+
+    def _ask_agent_with_timeout(self, prompt: str) -> str:
+        """Bound the synchronous SDK call and interrupt the conversation on timeout."""
+        result_queue: Queue[tuple[str, str | BaseException]] = Queue(maxsize=1)
+
+        def worker() -> None:
+            try:
+                result_queue.put(("result", self._conversation.ask_agent(prompt)))
+            except BaseException as exc:  # noqa: BLE001
+                result_queue.put(("error", exc))
+
+        thread = threading.Thread(
+            target=worker,
+            name="openhands-supervisor-call",
+            daemon=True,
+        )
+        thread.start()
+        thread.join(timeout=self._timeout)
+
+        if thread.is_alive():
+            try:
+                self._conversation.interrupt()
+            except Exception as exc:  # noqa: BLE001
+                raise OpenHandsSupervisorError(
+                    f"Supervisor timed out after {self._timeout}s and interrupt failed: {exc}"
+                ) from exc
+            raise OpenHandsSupervisorError(
+                f"Supervisor timed out after {self._timeout}s"
+            )
+
+        kind, value = result_queue.get()
+        if kind == "error":
+            raise value
+        return value
 
     def interrupt(self) -> None:
         self._conversation.interrupt()
@@ -185,7 +233,10 @@ class OpenHandsSupervisorFactory:
                 f"Failed to create OpenHands Supervisor conversation: {exc}"
             ) from exc
 
-        return OpenHandsSupervisorAdapter(conversation)
+        return OpenHandsSupervisorAdapter(
+            conversation,
+            timeout=self.config.timeout,
+        )
 
     @staticmethod
     def _load_sdk() -> dict[str, Any]:

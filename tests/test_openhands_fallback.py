@@ -60,6 +60,30 @@ def test_build_llm_kwargs_sets_fast_retry_policy():
     }
 
 
+def test_build_llm_kwargs_disables_unsupported_google_gemini_prompt_cache_key():
+    kwargs = build_llm_kwargs(
+        model="openai/gemini-3.6-flash",
+        api_key="sk-dummy",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        timeout=EXECUTOR_TIMEOUT_SECONDS,
+    )
+
+    assert kwargs["capability_overrides"] == {
+        "supports_prompt_cache_key": False
+    }
+
+
+def test_build_llm_kwargs_leaves_other_providers_unchanged():
+    kwargs = build_llm_kwargs(
+        model="xai/grok-4.7",
+        api_key="sk-dummy",
+        base_url="https://api.x.ai/v1",
+        timeout=EXECUTOR_TIMEOUT_SECONDS,
+    )
+
+    assert "capability_overrides" not in kwargs
+
+
 def test_build_llm_kwargs_preserves_configured_values():
     kwargs = build_llm_kwargs(
         model="xai/grok-4.7",
