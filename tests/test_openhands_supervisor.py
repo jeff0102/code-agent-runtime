@@ -129,6 +129,33 @@ def test_adapter_enforces_timeout_and_interrupts():
     assert conversation.interrupted
 
 
+def test_adapter_fails_over_to_next_provider_after_timeout():
+    class SlowConversation(FakeConversation):
+        def ask_agent(self, question):
+            threading.Event().wait(1.2)
+            return self.response
+
+    primary = SlowConversation(
+        '{"schema_version":1,"message_type":"supervisor_decision","decision":"ACCEPT","task_complete":true,'
+        '"instructions":[],"blocking_reason":null}'
+    )
+    fallback = FakeConversation(
+        '{"schema_version":1,"message_type":"supervisor_decision","decision":"BLOCK","task_complete":false,'
+        '"instructions":[],"blocking_reason":"Primary provider timed out."}'
+    )
+    adapter = OpenHandsSupervisorAdapter(
+        primary,
+        fallback_conversations=(fallback,),
+        timeout=1,
+    )
+
+    result = adapter.review("Review this implementation.")
+
+    assert result.conversation_id == str(fallback.id)
+    assert result.decision.decision is SupervisorDecisionType.BLOCK
+    assert primary.interrupted
+
+
 def test_factory_creates_agent_without_tools(monkeypatch, tmp_path):
     FakeConversationFactory.created.clear()
     monkeypatch.setattr(
@@ -206,30 +233,21 @@ def test_adapter_plans_next_task():
     assert result.plan.title == "Add configuration loader"
 
 
-def test_factory_attaches_configured_fallback_strategy(monkeypatch, tmp_path):
-    class FakeProfileStore:
-        def __init__(self, base_dir):
-            self.base_dir = base_dir
-
-        def save(self, name, llm, include_secrets=False):
-            assert include_secrets is True
-
-    class FakeFallbackStrategy:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
+def test_factory_creates_separate_supervisor_provider_conversations(
+    monkeypatch,
+    tmp_path,
+):
     sdk = {
         "Agent": FakeAgent,
         "Conversation": FakeConversationFactory,
         "LLM": FakeLLM,
-        "LLMProfileStore": FakeProfileStore,
-        "FallbackStrategy": FakeFallbackStrategy,
     }
     monkeypatch.setattr(
         OpenHandsSupervisorFactory,
         "_load_sdk",
         staticmethod(lambda: sdk),
     )
+    FakeConversationFactory.created.clear()
 
     factory = OpenHandsSupervisorFactory(
         OpenHandsSupervisorConfig(
@@ -245,10 +263,14 @@ def test_factory_attaches_configured_fallback_strategy(monkeypatch, tmp_path):
         )
     )
 
-    factory.create(reviewer_workspace=tmp_path)
-    llm = FakeConversationFactory.created[-1].kwargs["agent"].kwargs["llm"]
+    adapter = factory.create(reviewer_workspace=tmp_path)
+    assert len(FakeConversationFactory.created) == 2
+    primary = FakeConversationFactory.created[0]
+    fallback = FakeConversationFactory.created[1]
 
-    assert isinstance(llm.kwargs["fallback_strategy"], FakeFallbackStrategy)
-    assert llm.kwargs["fallback_strategy"].kwargs["fallback_llms"] == [
-        "supervisor-fallback-1"
-    ]
+    assert adapter.conversation_id == str(primary.id)
+    assert primary.kwargs["agent"].kwargs["tools"] == []
+    assert primary.kwargs["agent"].kwargs["llm"].kwargs["model"] == (
+        "gemini/gemini-3.8-flash"
+    )
+    assert fallback.kwargs["agent"].kwargs["llm"].kwargs["model"] == "xai/grok-4.7"
