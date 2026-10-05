@@ -11,6 +11,8 @@ from typing import Any
 LLM_RETRY_ATTEMPTS = 3
 LLM_RETRY_WAIT_SECONDS = 60
 LLM_RETRY_MULTIPLIER = 1.0
+EXECUTOR_TIMEOUT_SECONDS = 120
+SUPERVISOR_TIMEOUT_SECONDS = 90
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,10 +33,13 @@ def build_llm_kwargs(
     model: str,
     api_key: str | None,
     base_url: str | None,
+    timeout: int,
 ) -> dict[str, Any]:
     """Build keyword arguments for the OpenHands SDK LLM constructor."""
     if not model.strip():
         raise ValueError("OpenHands model must not be empty")
+    if timeout < 1:
+        raise ValueError("OpenHands timeout must be greater than zero")
 
     kwargs: dict[str, Any] = {
         "model": model,
@@ -42,6 +47,7 @@ def build_llm_kwargs(
         "retry_min_wait": LLM_RETRY_WAIT_SECONDS,
         "retry_max_wait": LLM_RETRY_WAIT_SECONDS,
         "retry_multiplier": LLM_RETRY_MULTIPLIER,
+        "timeout": timeout,
     }
     if api_key is not None:
         kwargs["api_key"] = api_key
@@ -63,6 +69,7 @@ class FallbackProfileManager:
         self._sdk = sdk
         self._fallbacks = fallbacks
         self._usage_prefix = usage_prefix
+        self._timeout = timeout
         self._profile_store_dir: TemporaryDirectory[str] | None = None
         self._profile_names: list[str] = []
 
@@ -82,6 +89,7 @@ class FallbackProfileManager:
                     model=fallback.model,
                     api_key=fallback.api_key,
                     base_url=fallback.base_url,
+                    timeout=self._timeout,
                 ),
             )
             store.save(profile_name, llm, include_secrets=True)
