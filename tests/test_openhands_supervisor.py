@@ -111,6 +111,24 @@ def test_adapter_reviews_and_controls_conversation():
     assert conversation.closed
 
 
+def test_adapter_enforces_timeout_and_interrupts():
+    class SlowConversation(FakeConversation):
+        def ask_agent(self, question):
+            threading.Event().wait(0.2)
+            return self.response
+
+    conversation = SlowConversation(
+        '{"schema_version":1,"message_type":"supervisor_decision","decision":"ACCEPT","task_complete":true,'
+        '"instructions":[],"blocking_reason":null}'
+    )
+    adapter = OpenHandsSupervisorAdapter(conversation, timeout=0.01)
+
+    with pytest.raises(OpenHandsSupervisorError, match="timed out"):
+        adapter.review("Review this implementation.")
+
+    assert conversation.interrupted
+
+
 def test_factory_creates_agent_without_tools(monkeypatch, tmp_path):
     FakeConversationFactory.created.clear()
     monkeypatch.setattr(
@@ -186,9 +204,6 @@ def test_adapter_plans_next_task():
     result = adapter.plan("Plan the next task.")
 
     assert result.plan.title == "Add configuration loader"
-
-
-
 
 
 def test_factory_attaches_configured_fallback_strategy(monkeypatch, tmp_path):
