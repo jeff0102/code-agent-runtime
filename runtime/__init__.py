@@ -15,6 +15,11 @@ from runtime.context import (
     build_supervisor_context,
 )
 from runtime.lease import WorkspaceLease
+from runtime.git_integration import (
+    GitRemoteIntegration,
+    RemoteIntegrationConfig,
+    RemoteSyncResult,
+)
 from runtime.openhands_executor import (
     OpenHandsAdapterError,
     OpenHandsConversationAdapter,
@@ -79,6 +84,7 @@ __all__ = [
     "ExecutorStatus",
     "GitContext",
     "GitWorkspace",
+    "GitRemoteIntegration",
     "Iteration",
     "OpenHandsAdapterError",
     "OpenHandsConversationAdapter",
@@ -102,6 +108,8 @@ __all__ = [
     "TaskRunResult",
     "Reconciliation",
     "RecoveryAction",
+    "RemoteIntegrationConfig",
+    "RemoteSyncResult",
     "Session",
     "SessionStatus",
     "StateError",

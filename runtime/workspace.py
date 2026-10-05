@@ -75,6 +75,21 @@ class GitWorkspace:
     def status(self) -> str:
         return self.run("status", "--porcelain=v1")
 
+    def unmerged_paths(self) -> list[str]:
+        """Return paths Git still marks as conflicted."""
+        output = self.run("diff", "--name-only", "--diff-filter=U")
+        return [path for path in output.splitlines() if path]
+
+    def merge_in_progress(self) -> bool:
+        """Return whether Git has an unfinished merge in this worktree."""
+        result = subprocess.run(
+            ["git", "rev-parse", "--quiet", "--verify", "MERGE_HEAD"],
+            cwd=self.path,
+            capture_output=True,
+            check=False,
+        )
+        return result.returncode == 0
+
     def diff(self) -> str:
         """Return the complete working-tree diff, including non-ignored untracked files.
 
@@ -137,7 +152,7 @@ class GitWorkspace:
         The runtime must only call this after validation and Supervisor
         acceptance, and after reconciling the workspace for unexpected changes.
         """
-        if not self.status().strip():
+        if not self.status().strip() and not self.merge_in_progress():
             raise WorkspaceError("Cannot create a checkpoint from a clean worktree")
         self.run("add", "--all")
         self.run("commit", "-m", message)

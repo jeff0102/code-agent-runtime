@@ -8,6 +8,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from runtime.artifacts import ArtifactStore
+from runtime.git_integration import GitRemoteIntegration, RemoteIntegrationConfig
 from runtime.context import (
     ContextLimits,
     build_executor_context,
@@ -96,6 +97,7 @@ class OrchestratorConfig:
     max_tasks_per_session: int = 100
     context_limits: ContextLimits = ContextLimits()
     reviewer_workspace: str | Path | None = None
+    remote_integration: RemoteIntegrationConfig = RemoteIntegrationConfig()
 
     def __post_init__(self) -> None:
         if self.lease_ttl_seconds <= 0:
@@ -206,6 +208,19 @@ class Orchestrator:
         ):
             self._prepare_target_branch(self.state.get_session(session_id))
             recovery = StartupRecovery(self.state).recover_session(session_id)
+            push_recovery_error = self._push_recovered_checkpoint(
+                session_id=session_id,
+                workspace=workspace,
+            )
+            if push_recovery_error is not None:
+                current = self.state.get_session(session_id)
+                return SessionRunResult(
+                    session_id=session_id,
+                    session_status=current.status,
+                    tasks_completed=self._accepted_task_count(session_id),
+                    checkpoint_sha=self._latest_checkpoint_sha(session_id),
+                    failure_reason=push_recovery_error,
+                )
             recovery_outcome = recovery.outcome
             if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
                 current = self.state.get_session(session_id)
@@ -369,6 +384,21 @@ class Orchestrator:
         ):
             self._prepare_target_branch(self.state.get_session(session_id))
             recovery = StartupRecovery(self.state).recover_session(session_id)
+            push_recovery_error = self._push_recovered_checkpoint(
+                session_id=session_id,
+                workspace=workspace,
+            )
+            if push_recovery_error is not None:
+                task = self.state.get_task(resolved_task_id)
+                return TaskRunResult(
+                    session_id=session_id,
+                    task_id=resolved_task_id,
+                    task_status=task.status,
+                    session_status=self.state.get_session(session_id).status,
+                    iterations=task.attempt_count,
+                    checkpoint_sha=self._latest_checkpoint_sha(session_id),
+                    failure_reason=push_recovery_error,
+                )
             if recovery.outcome is StartupRecoveryOutcome.BLOCKED:
                 session = self.state.get_session(session_id)
                 task = self.state.get_task(resolved_task_id)
@@ -469,6 +499,21 @@ class Orchestrator:
                         previous_decision = recovered_decision
                         recovery_outcome = StartupRecoveryOutcome.READY_FOR_EXECUTION
                         continue
+                    if recovered_decision.decision is SupervisorDecisionType.ACCEPT:
+                        push_error = self._push_recovered_checkpoint(
+                            session_id=session_id,
+                            workspace=workspace,
+                        )
+                        if push_error is not None:
+                            return TaskRunResult(
+                                session_id=session_id,
+                                task_id=task_id,
+                                task_status=self.state.get_task(task_id).status,
+                                session_status=self.state.get_session(session_id).status,
+                                iterations=self.state.get_task(task_id).attempt_count,
+                                checkpoint_sha=self._latest_checkpoint_sha(session_id),
+                                failure_reason=push_error,
+                            )
                     return recovered_result
                 iteration = pending
                 base_commit = pending.base_commit
@@ -498,6 +543,40 @@ class Orchestrator:
 
             try:
                 workspace.assert_branch(session.branch)
+                remote_sync = None
+                if self.config.remote_integration.enabled:
+                    remote_sync = GitRemoteIntegration(
+                        workspace,
+                        self.config.remote_integration,
+                    ).prepare_session_branch(session.branch)
+                    self.state.append_event(
+                        session_id,
+                        task_id,
+                        iteration.iteration_id,
+                        "REMOTE_TARGET_SYNCED",
+                        {
+                            "remote": self.config.remote_integration.remote,
+                            "target_branch": self.config.remote_integration.target_branch,
+                            "target_sha": remote_sync.target_sha,
+                            "conflicts": list(remote_sync.conflicts),
+                            "target_integrated": remote_sync.target_integrated,
+                        },
+                    )
+                    synchronized_commit = workspace.current_commit()
+                    if synchronized_commit != base_commit:
+                        base_commit = synchronized_commit
+                        iteration = self.state.update_pending_iteration_base_commit(
+                            iteration.iteration_id,
+                            base_commit,
+                        )
+                        self.state.append_event(
+                            session_id,
+                            task_id,
+                            iteration.iteration_id,
+                            "ITERATION_BASE_ADVANCED_AFTER_REMOTE_SYNC",
+                            {"base_commit": base_commit},
+                        )
+                executor_base_commit = workspace.current_commit()
                 scope = build_scope_context(
                     session.workspace_path,
                     scope_hash=session.scope_hash,
@@ -517,7 +596,12 @@ class Orchestrator:
                     previous_revision_instructions=previous_revision_instructions,
                     limits=self.config.context_limits,
                 )
-                executor_prompt = self._executor_prompt(executor_context.to_json())
+                executor_prompt = self._executor_prompt(
+                    executor_context.to_json(),
+                    integration_conflicts=bool(
+                        remote_sync and remote_sync.conflicts
+                    ),
+                )
 
                 executor = self.executor_factory.create(
                     workspace_path=session.workspace_path,
@@ -578,7 +662,7 @@ class Orchestrator:
 
                 self._heartbeat(session.workspace_path, session_id)
                 workspace.assert_branch(session.branch)
-                if workspace.current_commit() != base_commit:
+                if workspace.current_commit() != executor_base_commit:
                     raise WorkspaceError(
                         "Executor must not create commits or rewrite Git history; "
                         "the runtime owns checkpoint commits."
@@ -758,6 +842,12 @@ class Orchestrator:
                         gate_reasons.append(
                             "Executor did not report a completed execution state."
                         )
+                    unresolved_conflicts = workspace.unmerged_paths()
+                    if unresolved_conflicts:
+                        gate_reasons.append(
+                            "Git merge conflicts remain unresolved: "
+                            + ", ".join(unresolved_conflicts)
+                        )
                 if gate_reasons:
                     effective_decision = SupervisorDecision(
                         decision=SupervisorDecisionType.REVISE,
@@ -787,13 +877,120 @@ class Orchestrator:
                 self._heartbeat(session.workspace_path, session_id)
 
                 if decision is Decision.ACCEPT:
+                    merge_in_progress = (
+                        self.config.remote_integration.enabled
+                        and GitRemoteIntegration(
+                            workspace,
+                            self.config.remote_integration,
+                        ).merge_in_progress()
+                    )
+                    target_integrated_for_push = bool(
+                        remote_sync
+                        and (remote_sync.target_integrated or merge_in_progress)
+                    )
                     checkpoint_sha = (
                         workspace.checkpoint(
                             f"runtime-checkpoint:{iteration.iteration_id}"
                         )
-                        if workspace.status().strip()
+                        if workspace.status().strip() or merge_in_progress
                         else workspace.current_commit()
                     )
+                    if merge_in_progress:
+                        self.state.append_event(
+                            session_id,
+                            task_id,
+                            iteration.iteration_id,
+                            "REMOTE_MERGE_CONFLICTS_RESOLVED",
+                            {"commit_sha": checkpoint_sha},
+                        )
+                    if self.config.remote_integration.enabled:
+                        integration = GitRemoteIntegration(
+                            workspace,
+                            self.config.remote_integration,
+                        )
+                        try:
+                            integration.push_session_branch(session.branch)
+                            checkpoint_sha = workspace.current_commit()
+                            self.state.append_event(
+                                session_id,
+                                task_id,
+                                iteration.iteration_id,
+                                "REMOTE_TARGET_PUSHED",
+                                {
+                                    "remote": self.config.remote_integration.remote,
+                                    "target_branch": self.config.remote_integration.target_branch,
+                                    "commit_sha": checkpoint_sha,
+                                },
+                            )
+                        except WorkspaceError as push_error:
+                            latest_sync = integration.prepare_session_branch(
+                                session.branch
+                            )
+                            if (
+                                remote_sync is not None
+                                and (
+                                    latest_sync.target_sha != remote_sync.target_sha
+                                    or not target_integrated_for_push
+                                )
+                            ):
+                                revision_instructions = [
+                                    "The remote target advanced after review. Integrate "
+                                    "its latest changes into this session branch, resolve "
+                                    "any conflicts while preserving valid behavior from "
+                                    "both sides, then run validations. The Supervisor "
+                                    "must review the merged result before another push."
+                                ]
+                                previous_revision_instructions = revision_instructions
+                                previous_decision = SupervisorDecision(
+                                    decision=SupervisorDecisionType.REVISE,
+                                    task_complete=False,
+                                    instructions=revision_instructions,
+                                    blocking_reason=None,
+                                )
+                                self.state.complete_iteration(
+                                    iteration.iteration_id,
+                                    Decision.REVISE,
+                                    failure_reason="Remote target advanced during push.",
+                                )
+                                self.state.append_event(
+                                    session_id,
+                                    task_id,
+                                    iteration.iteration_id,
+                                    "REMOTE_PUSH_REQUIRES_REVIEW",
+                                    {
+                                        "target_sha": latest_sync.target_sha,
+                                        "conflicts": list(latest_sync.conflicts),
+                                        "push_error": str(push_error),
+                                    },
+                                )
+                                continue
+
+                            reason = (
+                                "Accepted work is checkpointed locally, but pushing "
+                                "to the configured remote target failed: "
+                                f"{push_error}"
+                            )
+                            self.state.complete_iteration(
+                                iteration.iteration_id,
+                                Decision.BLOCK,
+                                failure_reason=reason,
+                            )
+                            self.state.append_event(
+                                session_id,
+                                task_id,
+                                iteration.iteration_id,
+                                "REMOTE_PUSH_BLOCKED",
+                                {"reason": reason},
+                            )
+                            return TaskRunResult(
+                                session_id=session_id,
+                                task_id=task_id,
+                                task_status=TaskStatus.BLOCKED,
+                                session_status=self.state.get_session(session_id).status,
+                                iterations=self.state.get_task(task_id).attempt_count,
+                                checkpoint_sha=checkpoint_sha,
+                                failure_reason=reason,
+                            )
                     self.state.complete_iteration(
                         iteration.iteration_id,
                         Decision.ACCEPT,
@@ -1026,6 +1223,61 @@ class Orchestrator:
             if task.status is TaskStatus.ACCEPTED
         )
 
+    def _push_recovered_checkpoint(
+        self,
+        *,
+        session_id: str,
+        workspace: GitWorkspace,
+    ) -> str | None:
+        """Retry publication after a crash between local acceptance and push."""
+        if not self.config.remote_integration.enabled:
+            return None
+        checkpoint = self.state.latest_checkpoint(session_id)
+        if checkpoint is None:
+            return None
+        session = self.state.get_session(session_id)
+        if (
+            workspace.current_branch() != session.branch
+            or workspace.status().strip()
+            or workspace.current_commit() != checkpoint.commit_sha
+        ):
+            return None
+
+        integration = GitRemoteIntegration(
+            workspace,
+            self.config.remote_integration,
+        )
+        try:
+            integration.push_session_branch(session.branch)
+        except WorkspaceError as exc:
+            reason = (
+                "Could not publish the recovered accepted checkpoint. The remote "
+                "target may have advanced; the session is blocked for safe recovery. "
+                f"Git reported: {exc}"
+            )
+            self.state.append_event(
+                session_id,
+                None,
+                None,
+                "RECOVERED_CHECKPOINT_PUSH_BLOCKED",
+                {"checkpoint_sha": checkpoint.commit_sha, "reason": reason},
+            )
+            self.state.set_session_status(session_id, SessionStatus.BLOCKED)
+            return reason
+
+        self.state.append_event(
+            session_id,
+            checkpoint.task_id,
+            checkpoint.iteration_id,
+            "RECOVERED_CHECKPOINT_PUSHED",
+            {
+                "remote": self.config.remote_integration.remote,
+                "target_branch": self.config.remote_integration.target_branch,
+                "commit_sha": checkpoint.commit_sha,
+            },
+        )
+        return None
+
     def _apply_recovered_supervisor_decision(
         self,
         *,
@@ -1196,13 +1448,28 @@ class Orchestrator:
         return checkpoint.commit_sha if checkpoint is not None else None
 
     @staticmethod
-    def _executor_prompt(context_json: str) -> str:
+    def _executor_prompt(
+        context_json: str,
+        *,
+        integration_conflicts: bool = False,
+    ) -> str:
+        integration_guidance = (
+            "The runtime has merged the configured remote target into this isolated "
+            "session branch and Git reports unresolved conflicts. Resolve every "
+            "conflict in the working tree, preserve valid behavior from both sides, "
+            "stage resolved paths with git add, and do not create a commit. The "
+            "runtime will finalize the merge commit, run validations, and ask the "
+            "Supervisor to review the result.\n\n"
+            if integration_conflicts
+            else ""
+        )
         return (
             "Execute the assigned coding task in the provided workspace. "
             "You are the only agent allowed to modify source files. "
             "Stay within SCOPE.md and AGENTS.md. Implement the task, run the "
             "available validation commands when practical, and stop when the "
             "task is complete or you are blocked.\n\n"
+            f"{integration_guidance}"
             "Executor context (JSON):\n"
             f"{context_json}"
         )
