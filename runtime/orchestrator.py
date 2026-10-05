@@ -544,6 +544,13 @@ class Orchestrator:
                 finally:
                     executor.close()
 
+                self._record_executor_output_artifacts(
+                    session_id=session_id,
+                    task_id=task_id,
+                    iteration_id=iteration.iteration_id,
+                    conversation_id=execution.conversation_id,
+                )
+
                 self.state.set_iteration_conversations(
                     iteration.iteration_id,
                     execution.conversation_id,
@@ -646,6 +653,7 @@ class Orchestrator:
                     ),
                     validation=validation,
                     executor_report=executor_report,
+                    changed_files=executor_report.changed_files,
                     previous_decision=previous_decision,
                     limits=self.config.context_limits,
                 )
@@ -1243,6 +1251,37 @@ class Orchestrator:
             ("git.diff", snapshot.diff),
         ):
             path, digest, size = self.artifact_store.write_text(
+                session_id,
+                task_id,
+                iteration_id,
+                artifact_type,
+                content,
+            )
+            self.state.record_artifact(
+                session_id,
+                artifact_type,
+                path,
+                digest,
+                size,
+                task_id=task_id,
+                iteration_id=iteration_id,
+            )
+
+    def _record_executor_output_artifacts(
+        self,
+        *,
+        session_id: str,
+        task_id: str,
+        iteration_id: str,
+        conversation_id: str,
+    ) -> None:
+        collect = getattr(self.executor_factory, "full_output_artifacts", None)
+        if not callable(collect):
+            return
+        for filename, content in collect(conversation_id):
+            output_id = Path(filename).stem.removeprefix("terminal_output_")
+            artifact_type = f"terminal-output-{output_id}"
+            path, digest, size = self.artifact_store.write_bytes(
                 session_id,
                 task_id,
                 iteration_id,

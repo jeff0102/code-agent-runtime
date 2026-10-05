@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -74,7 +76,34 @@ class GitWorkspace:
         return self.run("status", "--porcelain=v1")
 
     def diff(self) -> str:
-        return self.run("diff", "HEAD", "--binary")
+        """Return the complete working-tree diff, including non-ignored untracked files.
+
+        Git's ordinary ``diff HEAD`` omits untracked files. Stage the worktree into
+        a temporary index instead of the repository's real index, then diff that
+        index against HEAD. This also leaves the user's staging area untouched.
+        """
+        with tempfile.TemporaryDirectory(prefix="code-agent-runtime-index-") as tmp:
+            index_path = Path(tmp) / "index"
+            env = {**os.environ, "GIT_INDEX_FILE": str(index_path)}
+            self._run_with_env(env, "read-tree", "HEAD")
+            self._run_with_env(env, "add", "--all")
+            return self._run_with_env(env, "diff", "--cached", "HEAD", "--binary")
+
+    def _run_with_env(self, env: dict[str, str], *args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=self.path,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise WorkspaceError(
+                f"git {' '.join(args)} failed with exit code {result.returncode}: "
+                f"{result.stderr.strip()}"
+            )
+        return result.stdout
 
     def snapshot(self) -> WorkspaceSnapshot:
         return WorkspaceSnapshot(

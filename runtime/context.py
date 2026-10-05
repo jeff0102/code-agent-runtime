@@ -23,12 +23,12 @@ class ContextLimits:
 
     scope_chars: int = 50_000
     agents_chars: int = 30_000
-    diff_chars: int = 40_000
-    git_status_chars: int = 10_000
-    revision_instructions_chars: int = 10_000
-    validation_summary_chars: int = 20_000
-    executor_report_chars: int = 20_000
-    prior_decision_chars: int = 10_000
+    diff_chars: int = 16_000
+    git_status_chars: int = 4_000
+    revision_instructions_chars: int = 6_000
+    validation_summary_chars: int = 4_000
+    executor_report_chars: int = 8_000
+    prior_decision_chars: int = 4_000
 
     def __post_init__(self) -> None:
         for name, value in asdict(self).items():
@@ -105,6 +105,7 @@ class SupervisorContext:
     task: Task
     scope: ScopeContext
     git: GitContext
+    changed_files: list[str]
     validation: dict[str, Any]
     executor_report: dict[str, Any] | None
     previous_decision: dict[str, Any] | None
@@ -128,6 +129,7 @@ class SupervisorContext:
                 "status": self.git.status,
                 "diff": self.git.diff,
             },
+            "changed_files": list(self.changed_files),
             "validation": self.validation,
             "executor_report": self.executor_report,
             "previous_decision": self.previous_decision,
@@ -290,6 +292,7 @@ def build_supervisor_context(
     git: GitContext,
     validation: ValidationResult,
     executor_report: ExecutorReport | None,
+    changed_files: list[str] | None = None,
     previous_decision: SupervisorDecision | None = None,
     limits: ContextLimits | None = None,
 ) -> SupervisorContext:
@@ -341,6 +344,11 @@ def build_supervisor_context(
         task=task,
         scope=scope,
         git=git,
+        changed_files=(
+            list(changed_files)
+            if changed_files is not None
+            else list(executor_report.changed_files if executor_report else [])
+        ),
         validation=validation_dict,
         executor_report=report_dict,
         previous_decision=decision_dict,

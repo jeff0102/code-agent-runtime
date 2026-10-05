@@ -183,6 +183,34 @@ class OpenHandsExecutorFactory:
 
         return OpenHandsConversationAdapter(conversation)
 
+    def full_output_artifacts(self, conversation_id: str) -> list[tuple[str, bytes]]:
+        """Return full terminal outputs persisted natively by OpenHands.
+
+        OpenHands writes these files when its TerminalObservation truncates a
+        large result. The runtime copies them into its own artifact store after
+        the conversation finishes so they are indexed with the task iteration.
+        """
+        if self.config.persistence_dir is None:
+            return []
+        try:
+            conversation_uuid = self._coerce_uuid(conversation_id)
+        except OpenHandsAdapterError:
+            return []
+        observation_dir = (
+            Path(self.config.persistence_dir)
+            / conversation_uuid.hex
+            / "observations"
+        )
+        if not observation_dir.is_dir():
+            return []
+        artifacts: list[tuple[str, bytes]] = []
+        for path in sorted(observation_dir.glob("terminal_output_*.txt")):
+            try:
+                artifacts.append((path.name, path.read_bytes()))
+            except OSError:
+                continue
+        return artifacts
+
     @staticmethod
     def _coerce_uuid(value: str | UUID) -> UUID:
         try:
