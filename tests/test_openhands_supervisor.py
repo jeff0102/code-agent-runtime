@@ -143,6 +143,7 @@ def test_factory_creates_agent_without_tools(monkeypatch, tmp_path):
     assert agent.kwargs["tools"] == []
     assert agent.kwargs["llm"].kwargs["model"] == "openai/gemini-primary"
     assert conversation.kwargs["persistence_dir"] == str(tmp_path / "sessions")
+    assert agent.kwargs["llm"].kwargs["timeout"] == 90
     assert conversation.kwargs["conversation_id"] == UUID(
         "44444444-4444-4444-4444-444444444444"
     )
