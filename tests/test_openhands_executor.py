@@ -152,6 +152,7 @@ def test_factory_builds_executor_with_only_write_tools(monkeypatch, tmp_path):
         "retry_min_wait": 60,
         "retry_max_wait": 60,
         "retry_multiplier": 1.0,
+        "timeout": 120,
     }
 
     tool_names = [
