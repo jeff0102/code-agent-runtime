@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from queue import Queue
 from typing import Any, Protocol
@@ -66,12 +67,14 @@ class OpenHandsSupervisorAdapter:
         conversation: SupervisorConversationLike,
         *,
         fallback_conversations: tuple[SupervisorConversationLike, ...] = (),
+        fallback_storage: TemporaryDirectory[str] | None = None,
         timeout: int = SUPERVISOR_TIMEOUT_SECONDS,
     ) -> None:
         if timeout < 1:
             raise ValueError("timeout must be greater than zero")
         self._conversations = (conversation, *fallback_conversations)
         self._active_provider_index = 0
+        self._fallback_storage = fallback_storage
         self._timeout = timeout
 
     @property
@@ -187,8 +190,13 @@ class OpenHandsSupervisorAdapter:
         self._conversations[self._active_provider_index].interrupt()
 
     def close(self) -> None:
-        for conversation in self._conversations:
-            conversation.close()
+        try:
+            for conversation in self._conversations:
+                conversation.close()
+        finally:
+            if self._fallback_storage is not None:
+                self._fallback_storage.cleanup()
+                self._fallback_storage = None
 
 
 class OpenHandsSupervisorFactory:
@@ -227,6 +235,11 @@ class OpenHandsSupervisorFactory:
         )
 
         conversations: list[SupervisorConversationLike] = []
+        fallback_storage = (
+            TemporaryDirectory(prefix="code-agent-runtime-supervisor-fallbacks-")
+            if len(provider_configs) > 1
+            else None
+        )
         try:
             for provider_index, provider in enumerate(provider_configs):
                 llm = sdk["LLM"](
@@ -254,8 +267,13 @@ class OpenHandsSupervisorFactory:
                     "workspace": workspace,
                     "delete_on_close": False,
                 }
-                if self.config.persistence_dir is not None:
-                    kwargs["persistence_dir"] = str(self.config.persistence_dir)
+                if provider_index == 0:
+                    if self.config.persistence_dir is not None:
+                        kwargs["persistence_dir"] = str(self.config.persistence_dir)
+                elif fallback_storage is not None:
+                    fallback_path = Path(fallback_storage.name) / f"provider-{provider_index + 1}"
+                    fallback_path.mkdir(parents=True, exist_ok=True)
+                    kwargs["persistence_dir"] = str(fallback_path)
                 if provider["conversation_id"] is not None:
                     kwargs["conversation_id"] = _coerce_uuid(provider["conversation_id"])
 
@@ -272,11 +290,14 @@ class OpenHandsSupervisorFactory:
                     conversation.close()
                 except Exception:
                     pass
+            if fallback_storage is not None:
+                fallback_storage.cleanup()
             raise
 
         return OpenHandsSupervisorAdapter(
             conversations[0],
             fallback_conversations=tuple(conversations[1:]),
+            fallback_storage=fallback_storage,
             timeout=self.config.timeout,
         )
 
