@@ -86,6 +86,38 @@ def test_parse_supervisor_decision_rejects_invalid_json():
     with pytest.raises(Exception):
         parse_supervisor_decision("not json")
 
+@pytest.mark.parametrize(
+    "payload,expected,complete",
+    [
+        ('{"decision":"ACCEPT","instructions":[]}', SupervisorDecisionType.ACCEPT, True),
+        (
+            '{"type":"SupervisorDecision","status":"REVISE","instructions":["Fix the issue."]}',
+            SupervisorDecisionType.REVISE,
+            False,
+        ),
+    ],
+)
+def test_parse_supervisor_decision_normalizes_known_response_shapes(
+    payload, expected, complete
+):
+    decision = parse_supervisor_decision(payload)
+    assert decision.decision is expected
+    assert decision.task_complete is complete
+
+
+def test_parse_supervisor_decision_block_still_requires_reason():
+    with pytest.raises(Exception, match="blocking_reason"):
+        parse_supervisor_decision('{"decision":"BLOCK","instructions":[]}')
+
+def test_parse_supervisor_decision_unwraps_nested_decision():
+    decision = parse_supervisor_decision(
+        '{"type":"SupervisorDecision","decision":{'
+        '"decision":"BLOCK","task_complete":false,"instructions":[],'
+        '"blocking_reason":"Missing validation evidence."}}'
+    )
+    assert decision.decision is SupervisorDecisionType.BLOCK
+    assert decision.blocking_reason == "Missing validation evidence."
+
 
 def test_config_requires_model():
     with pytest.raises(ValueError, match="model"):
@@ -195,7 +227,9 @@ def test_parse_supervisor_plan_accepts_next_task():
         ),
     ],
 )
-def test_parse_supervisor_task_plan_variants(payload, expected_instruction, expected_detail):
+def test_parse_supervisor_task_plan_variants(
+    payload, expected_instruction, expected_detail
+):
     plan = parse_supervisor_plan(payload)
     assert plan.title == "Bootstrap"
     assert expected_instruction in plan.instructions
@@ -217,6 +251,15 @@ def test_parse_supervisor_task_plan_accepts_latest_nested_scope_shape():
     assert plan.title == "Implement the minimal FastAPI health endpoint"
     assert "GET /health" in plan.instructions
 
+
+def test_adapter_review_error_preserves_raw_response():
+    response = '{"decision":"UNKNOWN","instructions":[]}'
+    adapter = OpenHandsSupervisorAdapter(FakeConversation(response))
+
+    with pytest.raises(OpenHandsSupervisorError) as exc_info:
+        adapter.review("Review this implementation.")
+
+    assert exc_info.value.raw_response == response
 
 def test_adapter_plans_next_task():
     response = (

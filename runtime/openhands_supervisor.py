@@ -80,16 +80,19 @@ class OpenHandsSupervisorAdapter:
         if not prompt.strip():
             raise ValueError("Supervisor review prompt must not be empty")
 
+        raw_response: str | None = None
         try:
             raw_response = self._conversation.ask_agent(prompt)
             decision = parse_supervisor_decision(raw_response)
         except (ProtocolError, ValueError) as exc:
             raise OpenHandsSupervisorError(
-                f"Supervisor returned an invalid decision: {exc}"
+                f"Supervisor returned an invalid decision: {exc}",
+                raw_response=raw_response,
             ) from exc
         except Exception as exc:
             raise OpenHandsSupervisorError(
-                f"OpenHands Supervisor review failed: {exc}"
+                f"OpenHands Supervisor review failed: {exc}",
+                raw_response=raw_response,
             ) from exc
 
         return OpenHandsSupervisorResult(
@@ -248,7 +251,44 @@ def parse_supervisor_decision(response: str) -> SupervisorDecision:
             f"Supervisor response was not valid JSON: {exc}"
         ) from exc
 
+    if isinstance(payload, dict):
+        payload = _normalize_supervisor_decision_payload(payload)
     return SupervisorDecision.from_dict(payload)
+
+
+def _normalize_supervisor_decision_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize known SupervisorDecision envelopes into the runtime protocol."""
+    normalized = dict(payload)
+
+    if normalized.get("type") == "SupervisorDecision":
+        nested = normalized.get("decision")
+        if isinstance(nested, dict):
+            normalized = dict(nested)
+        else:
+            status = normalized.get("status")
+            if "decision" not in normalized and status in {
+                "ACCEPT",
+                "REVISE",
+                "BLOCK",
+            }:
+                normalized["decision"] = status
+            normalized.pop("type", None)
+            normalized.pop("status", None)
+
+    normalized.setdefault("schema_version", SCHEMA_VERSION)
+    normalized.setdefault("message_type", "supervisor_decision")
+
+    decision = normalized.get("decision")
+    if decision == "ACCEPT":
+        normalized.setdefault("task_complete", True)
+        normalized.setdefault("blocking_reason", None)
+    elif decision == "REVISE":
+        normalized.setdefault("task_complete", False)
+        normalized.setdefault("blocking_reason", None)
+    elif decision == "BLOCK":
+        normalized.setdefault("task_complete", False)
+
+    return normalized
 
 
 def parse_supervisor_plan(response: str) -> SupervisorPlan:

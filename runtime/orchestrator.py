@@ -669,7 +669,45 @@ class Orchestrator:
                     "SUPERVISOR_STARTED",
                     {"conversation_id": supervisor.conversation_id},
                 )
-                review = supervisor.review(supervisor_prompt)
+                try:
+                    review = supervisor.review(supervisor_prompt)
+                except OpenHandsSupervisorError as exc:
+                    if exc.raw_response is not None:
+                        raw_path, raw_hash, raw_size = self.artifact_store.write_text(
+                            session_id,
+                            task_id,
+                            iteration.iteration_id,
+                            "supervisor-decision-response-raw.txt",
+                            exc.raw_response,
+                        )
+                        self.state.record_artifact(
+                            session_id,
+                            "supervisor_decision_response_raw",
+                            raw_path,
+                            raw_hash,
+                            raw_size,
+                            task_id=task_id,
+                            iteration_id=iteration.iteration_id,
+                        )
+                        self.state.append_event(
+                            session_id,
+                            task_id,
+                            iteration.iteration_id,
+                            "SUPERVISOR_DECISION_RAW_RESPONSE_SAVED",
+                            {
+                                "conversation_id": supervisor.conversation_id,
+                                "path": raw_path,
+                                "sha256": raw_hash,
+                                "size_bytes": raw_size,
+                            },
+                        )
+                        raise RuntimeError(
+                            f"{exc}; raw response saved to {raw_path}"
+                        ) from exc
+                    raise
+                finally:
+                    supervisor.close()
+
                 self.state.set_iteration_conversations(
                     iteration.iteration_id,
                     execution.conversation_id,
@@ -701,8 +739,6 @@ class Orchestrator:
                     task_id=task_id,
                     iteration_id=iteration.iteration_id,
                 )
-                supervisor.close()
-
                 effective_decision = review.decision
                 gate_reasons: list[str] = []
                 if effective_decision.decision is SupervisorDecisionType.ACCEPT:
