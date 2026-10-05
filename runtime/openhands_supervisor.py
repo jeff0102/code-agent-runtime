@@ -11,7 +11,6 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from runtime.openhands_fallback import (
-    FallbackProfileManager,
     OpenHandsLLMFallbackConfig,
     build_llm_kwargs,
     SUPERVISOR_TIMEOUT_SECONDS,
@@ -66,23 +65,25 @@ class OpenHandsSupervisorAdapter:
         self,
         conversation: SupervisorConversationLike,
         *,
+        fallback_conversations: tuple[SupervisorConversationLike, ...] = (),
         timeout: int = SUPERVISOR_TIMEOUT_SECONDS,
     ) -> None:
         if timeout < 1:
             raise ValueError("timeout must be greater than zero")
-        self._conversation = conversation
+        self._conversations = (conversation, *fallback_conversations)
+        self._active_provider_index = 0
         self._timeout = timeout
 
     @property
     def conversation_id(self) -> str:
-        return str(self._conversation.id)
+        return str(self._conversations[self._active_provider_index].id)
 
     def review(self, prompt: str) -> OpenHandsSupervisorResult:
         if not prompt.strip():
             raise ValueError("Supervisor review prompt must not be empty")
 
         try:
-            raw_response = self._ask_agent_with_timeout(prompt)
+            raw_response = self._ask_agent_with_provider_failover(prompt)
             decision = parse_supervisor_decision(raw_response)
         except (ProtocolError, ValueError) as exc:
             raise OpenHandsSupervisorError(
@@ -106,7 +107,7 @@ class OpenHandsSupervisorAdapter:
             raise ValueError("Supervisor plan prompt must not be empty")
 
         try:
-            raw_response = self._ask_agent_with_timeout(prompt)
+            raw_response = self._ask_agent_with_provider_failover(prompt)
             plan = parse_supervisor_plan(raw_response)
         except (ProtocolError, ValueError) as exc:
             raise OpenHandsSupervisorError(
@@ -125,13 +126,36 @@ class OpenHandsSupervisorAdapter:
             raw_response=raw_response,
         )
 
-    def _ask_agent_with_timeout(self, prompt: str) -> str:
+    def _ask_agent_with_provider_failover(self, prompt: str) -> str:
+        """Try each configured Supervisor provider, including timeout failures."""
+        last_error: Exception | None = None
+
+        for index, conversation in enumerate(self._conversations):
+            self._active_provider_index = index
+            try:
+                return self._ask_agent_with_timeout(conversation, prompt)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                try:
+                    conversation.interrupt()
+                except Exception:
+                    pass
+
+        if last_error is not None:
+            raise last_error
+        raise OpenHandsSupervisorError("No Supervisor conversations are configured.")
+
+    def _ask_agent_with_timeout(
+        self,
+        conversation: SupervisorConversationLike,
+        prompt: str,
+    ) -> str:
         """Bound the synchronous SDK call and interrupt the conversation on timeout."""
         result_queue: Queue[tuple[str, str | BaseException]] = Queue(maxsize=1)
 
         def worker() -> None:
             try:
-                result_queue.put(("result", self._conversation.ask_agent(prompt)))
+                result_queue.put(("result", conversation.ask_agent(prompt)))
             except BaseException as exc:  # noqa: BLE001
                 result_queue.put(("error", exc))
 
@@ -145,7 +169,7 @@ class OpenHandsSupervisorAdapter:
 
         if thread.is_alive():
             try:
-                self._conversation.interrupt()
+                conversation.interrupt()
             except Exception as exc:  # noqa: BLE001
                 raise OpenHandsSupervisorError(
                     f"Supervisor timed out after {self._timeout}s and interrupt failed: {exc}"
@@ -160,16 +184,16 @@ class OpenHandsSupervisorAdapter:
         return value
 
     def interrupt(self) -> None:
-        self._conversation.interrupt()
+        self._conversations[self._active_provider_index].interrupt()
 
     def close(self) -> None:
-        self._conversation.close()
+        for conversation in self._conversations:
+            conversation.close()
 
 
 class OpenHandsSupervisorFactory:
     def __init__(self, config: OpenHandsSupervisorConfig) -> None:
         self.config = config
-        self._fallback_profiles: FallbackProfileManager | None = None
 
     def create(
         self,
@@ -184,57 +208,75 @@ class OpenHandsSupervisorFactory:
                 f"Supervisor workspace does not exist: {workspace}"
             )
 
-        if self._fallback_profiles is None and self.config.fallbacks:
-            self._fallback_profiles = FallbackProfileManager(
-                sdk=sdk,
-                fallbacks=self.config.fallbacks,
-                usage_prefix="supervisor",
-                timeout=self.config.timeout,
-            )
-
-        llm_kwargs = build_llm_kwargs(
-            model=self.config.model,
-            api_key=self.config.api_key,
-            base_url=self.config.base_url,
-            timeout=self.config.timeout,
-        )
-        if self._fallback_profiles is not None:
-            strategy = self._fallback_profiles.strategy()
-            if strategy is not None:
-                llm_kwargs["fallback_strategy"] = strategy
-
-        llm = sdk["LLM"](**llm_kwargs)
-        agent = sdk["Agent"](
-            llm=llm,
-            tools=[],
-            persona=(
-                "You are a read-only Supervisor for an autonomous software "
-                "development runtime. Review only supplied evidence. Do not "
-                "modify files. Follow the prompt's requested protocol exactly: "
-                "return either SupervisorDecision for implementation review "
-                "or SupervisorPlan for task planning."
+        provider_configs = (
+            {
+                "model": self.config.model,
+                "api_key": self.config.api_key,
+                "base_url": self.config.base_url,
+                "conversation_id": conversation_id,
+            },
+            *(
+                {
+                    "model": fallback.model,
+                    "api_key": fallback.api_key,
+                    "base_url": fallback.base_url,
+                    "conversation_id": None,
+                }
+                for fallback in self.config.fallbacks
             ),
         )
 
-        kwargs: dict[str, Any] = {
-            "agent": agent,
-            "workspace": workspace,
-            "delete_on_close": False,
-        }
-        if self.config.persistence_dir is not None:
-            kwargs["persistence_dir"] = str(self.config.persistence_dir)
-        if conversation_id is not None:
-            kwargs["conversation_id"] = _coerce_uuid(conversation_id)
-
+        conversations: list[SupervisorConversationLike] = []
         try:
-            conversation = sdk["Conversation"](**kwargs)
-        except Exception as exc:
-            raise OpenHandsSupervisorError(
-                f"Failed to create OpenHands Supervisor conversation: {exc}"
-            ) from exc
+            for provider_index, provider in enumerate(provider_configs):
+                llm = sdk["LLM"](
+                    **build_llm_kwargs(
+                        model=provider["model"],
+                        api_key=provider["api_key"],
+                        base_url=provider["base_url"],
+                        timeout=self.config.timeout,
+                    )
+                )
+                agent = sdk["Agent"](
+                    llm=llm,
+                    tools=[],
+                    persona=(
+                        "You are a read-only Supervisor for an autonomous software "
+                        "development runtime. Review only supplied evidence. Do not "
+                        "modify files. Follow the prompt's requested protocol exactly: "
+                        "return either SupervisorDecision for implementation review "
+                        "or SupervisorPlan for task planning."
+                    ),
+                )
+
+                kwargs: dict[str, Any] = {
+                    "agent": agent,
+                    "workspace": workspace,
+                    "delete_on_close": False,
+                }
+                if self.config.persistence_dir is not None:
+                    kwargs["persistence_dir"] = str(self.config.persistence_dir)
+                if provider["conversation_id"] is not None:
+                    kwargs["conversation_id"] = _coerce_uuid(provider["conversation_id"])
+
+                try:
+                    conversations.append(sdk["Conversation"](**kwargs))
+                except Exception as exc:
+                    raise OpenHandsSupervisorError(
+                        f"Failed to create OpenHands Supervisor conversation "
+                        f"for provider {provider_index + 1}: {exc}"
+                    ) from exc
+        except Exception:
+            for conversation in conversations:
+                try:
+                    conversation.close()
+                except Exception:
+                    pass
+            raise
 
         return OpenHandsSupervisorAdapter(
-            conversation,
+            conversations[0],
+            fallback_conversations=tuple(conversations[1:]),
             timeout=self.config.timeout,
         )
 
@@ -244,9 +286,7 @@ class OpenHandsSupervisorFactory:
             from openhands.sdk import (
                 Agent,
                 Conversation,
-                FallbackStrategy,
                 LLM,
-                LLMProfileStore,
             )
         except ImportError as exc:
             raise OpenHandsSupervisorError(
@@ -257,9 +297,7 @@ class OpenHandsSupervisorFactory:
         return {
             "Agent": Agent,
             "Conversation": Conversation,
-            "FallbackStrategy": FallbackStrategy,
             "LLM": LLM,
-            "LLMProfileStore": LLMProfileStore,
         }
 
 
