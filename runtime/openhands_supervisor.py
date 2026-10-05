@@ -276,7 +276,11 @@ def _normalize_supervisor_decision_payload(payload: dict[str, Any]) -> dict[str,
             normalized.pop("status", None)
 
     normalized.setdefault("schema_version", SCHEMA_VERSION)
-    normalized.setdefault("message_type", "supervisor_decision")
+    message_type = normalized.get("message_type")
+    if message_type == "SupervisorDecision":
+        normalized["message_type"] = "supervisor_decision"
+    else:
+        normalized.setdefault("message_type", "supervisor_decision")
 
     decision = normalized.get("decision")
     if decision == "ACCEPT":

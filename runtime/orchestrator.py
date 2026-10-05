@@ -1173,11 +1173,17 @@ class Orchestrator:
     def _supervisor_prompt(context_json: str) -> str:
         return (
             "Review the Executor work as a read-only Supervisor. "
-            "Use only the supplied evidence and do not modify any repository. "
-            "Return exactly one SupervisorDecision JSON object. "
-            "ACCEPT only when the acceptance criteria are satisfied; "
-            "REVISE with concrete instructions when more work is required; "
-            "BLOCK only when safe progress cannot continue.\n\n"
+            "Use only supplied evidence and do not modify any repository. "
+            "Return exactly one JSON object with every field present and this exact schema: "
+            "{\"schema_version\":1,\"message_type\":\"supervisor_decision\","
+            "\"decision\":\"ACCEPT|REVISE|BLOCK\",\"task_complete\":false,"
+            "\"instructions\":[],\"blocking_reason\":null}. "
+            "Use the exact message_type value supervisor_decision. "
+            "For ACCEPT, set task_complete=true, instructions=[], and blocking_reason=null. "
+            "For REVISE, set task_complete=false, provide non-empty instructions, and set blocking_reason=null. "
+            "For BLOCK, set task_complete=false, instructions=[], and provide a non-empty blocking_reason. "
+            "Do not omit fields or use a summary, rationale, or required_revisions wrapper. "
+            "ACCEPT only when the acceptance criteria are satisfied; REVISE with concrete actions otherwise.\n\n"
             "Supervisor context (JSON):\n"
             f"{context_json}"
         )

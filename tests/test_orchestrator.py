@@ -74,6 +74,12 @@ def create_runtime(tmp_path: Path, *, max_iterations: int = 3, branch: str = "ma
     artifacts = ArtifactStore(tmp_path / "artifacts")
     return repo, store, artifacts
 
+def test_supervisor_prompt_uses_canonical_decision_protocol():
+    prompt = Orchestrator._supervisor_prompt("{}")
+    assert '"message_type":"supervisor_decision"' in prompt
+    assert "Do not omit fields" in prompt
+    assert "REVISE" in prompt and "required_revisions wrapper" in prompt
+
 def test_planner_prompt_uses_runtime_protocol_and_schema():
     prompt = Orchestrator._planner_prompt("{}")
     assert '"message_type":"supervisor_plan"' in prompt

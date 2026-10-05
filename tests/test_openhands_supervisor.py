@@ -86,6 +86,22 @@ def test_parse_supervisor_decision_rejects_invalid_json():
     with pytest.raises(Exception):
         parse_supervisor_decision("not json")
 
+def test_parse_supervisor_decision_canonicalizes_observed_message_type_alias():
+    decision = parse_supervisor_decision(
+        '{"message_type":"SupervisorDecision","decision":"ACCEPT",'
+        '"task_complete":true,"instructions":[],"blocking_reason":null}'
+    )
+    assert decision.decision is SupervisorDecisionType.ACCEPT
+    assert decision.instructions == []
+
+
+def test_parse_supervisor_decision_rejects_unrecognized_message_type():
+    with pytest.raises(Exception, match="Invalid SupervisorDecision message_type"):
+        parse_supervisor_decision(
+            '{"schema_version":1,"message_type":"other","decision":"ACCEPT",'
+            '"task_complete":true,"instructions":[],"blocking_reason":null}'
+        )
+
 def test_parse_supervisor_decision_accept_defaults_missing_instructions():
     decision = parse_supervisor_decision(
         '{"decision":"ACCEPT","task_complete":true,"blocking_reason":null}'
