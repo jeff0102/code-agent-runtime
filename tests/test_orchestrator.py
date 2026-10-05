@@ -379,6 +379,59 @@ def test_orchestrator_runs_full_session_until_supervisor_done(tmp_path):
     ]
 
 
+def test_orchestrator_switches_branch_preserving_staged_and_untracked_changes(
+    tmp_path,
+):
+    repo, store, artifacts = create_runtime(
+        tmp_path, branch="agent/next-session"
+    )
+    (repo / "README.md").write_text("staged update\n", encoding="utf-8")
+    (repo / "open_job_radar").mkdir()
+    (repo / "open_job_radar" / "__init__.py").write_text(
+        "package marker\n", encoding="utf-8"
+    )
+    (repo / ".idea").mkdir()
+    (repo / ".idea" / "workspace.xml").write_text(
+        "<project />\n", encoding="utf-8"
+    )
+    subprocess.run(
+        ["git", "add", "README.md", "open_job_radar/__init__.py"],
+        cwd=repo,
+        check=True,
+    )
+
+    orchestrator = Orchestrator(
+        store, artifacts, object(), object(), OrchestratorConfig()
+    )
+    orchestrator._prepare_target_branch(store.get_session("session-1"))
+
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repo,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=repo,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.splitlines()
+    stashes = subprocess.run(
+        ["git", "stash", "list"],
+        cwd=repo,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+
+    assert branch == "agent/next-session"
+    assert staged == ["README.md", "open_job_radar/__init__.py"]
+    assert (repo / ".idea" / "workspace.xml").exists()
+    assert not stashes
+
 def test_orchestrator_creates_missing_runtime_branch(tmp_path):
     repo, store, artifacts = create_runtime(tmp_path, branch="agent/session-1")
     executor_factory = FakeExecutorFactory(repo, ["accepted\n"])

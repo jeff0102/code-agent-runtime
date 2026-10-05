@@ -972,14 +972,44 @@ class Orchestrator:
         current = workspace.current_branch()
         if current == session.branch:
             return
-        if workspace.status().strip():
-            raise OrchestrationError(
-                f"Cannot switch to runtime branch {session.branch!r} from a dirty workspace."
+
+        had_changes = bool(workspace.status().strip())
+        stash_created = False
+        if had_changes:
+            previous_stashes = workspace.run("stash", "list", "--format=%H")
+            workspace.run(
+                "stash",
+                "push",
+                "--include-untracked",
+                "--message",
+                f"runtime-auto-switch:{session.session_id}",
             )
-        if workspace.branch_exists(session.branch):
-            workspace.switch_branch(session.branch)
-        else:
-            workspace.create_branch(session.branch)
+            current_stashes = workspace.run("stash", "list", "--format=%H")
+            stash_created = current_stashes != previous_stashes
+            if workspace.status().strip():
+                raise OrchestrationError(
+                    "Could not safely prepare the workspace for a branch switch; "
+                    "changes were stashed where possible."
+                )
+
+        try:
+            if workspace.branch_exists(session.branch):
+                workspace.switch_branch(session.branch)
+            else:
+                workspace.create_branch(session.branch)
+            if stash_created:
+                workspace.run("stash", "pop", "--index")
+        except WorkspaceError as exc:
+            if stash_created:
+                raise OrchestrationError(
+                    f"Could not switch to runtime branch {session.branch!r} and "
+                    "restore the saved workspace changes. The changes remain in "
+                    "the Git stash; inspect the stash list before retrying. "
+                    f"Git reported: {exc}"
+                ) from exc
+            raise OrchestrationError(
+                f"Could not switch to runtime branch {session.branch!r}: {exc}"
+            ) from exc
 
     def _accepted_task_count(self, session_id: str) -> int:
         return sum(
