@@ -154,6 +154,19 @@ Continue numbering for additional providers. Each provider gets up to **three at
 
 Validation commands are parsed into arguments and run with `shell=False`; shell operators such as pipes and redirection are not interpreted. Each command has a five-minute timeout. Its stdout and stderr are retained as artifacts.
 
+## Local Make targets
+
+The root `Makefile` provides shortcuts for the common local workflows. GNU Make must be installed. Running `make` with no target displays the help list.
+
+| Target | Purpose |
+| --- | --- |
+| `make install` | Upgrade pip and install the runtime with OpenHands agent and development dependencies. |
+| `make run-wsl` | Start the configured Open Job Radar session using the WSL paths and Python command. Run from the runtime repository inside WSL. |
+| `make run-win` | Start the configured session using native Windows paths and Python. Run from the runtime repository in a GNU Make-compatible Windows shell. |
+| `make recover` | Stash tracked working-tree changes, check out local `main`, and try to reapply the stash. |
+
+`make recover` runs `git stash`, `git checkout main`, and `git stash pop` in that order. Standard `git stash` does not include untracked files. The Makefile ignores a non-zero exit from `git stash pop` as requested; if Git reports conflicts or the stash is still present, inspect `git status` and resolve the recovery manually before continuing.
+
 ## Running the runtime
 
 Install the `agents` extra, configure both model names and any provider credentials in the environment, and run the CLI from the installed environment. The following environment-specific invocations are the validated commands supplied for the Windows and WSL setups.
