@@ -1559,6 +1559,11 @@ class Orchestrator:
         return (
             "Execute the assigned coding task in the provided workspace. "
             "You are the only agent allowed to modify source files. "
+            "When executing terminal commands, NEVER set a timeout larger than "
+            "300 seconds (5 minutes). For long-running tasks, run them in the "
+            "background and redirect the output to a log file. Always ensure "
+            "commands are strictly non-interactive (e.g., use "
+            "GIT_TERMINAL_PROMPT=0).\n\n"
             "Stay within SCOPE.md and AGENTS.md. Implement the task, run the "
             "available validation commands when practical, and stop when the "
             "task is complete or you are blocked. For verification or audit tasks, "

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -14,9 +16,56 @@ from runtime.openhands_fallback import (
     EXECUTOR_TIMEOUT_SECONDS,
 )
 
+logger = logging.getLogger(__name__)
+
+MAX_TERMINAL_TIMEOUT_SECONDS = 300
+_TERMINAL_TOOL_REGISTRATION_LOCK = Lock()
+_CAPPED_TERMINAL_TOOL_CLASSES: dict[type[Any], type[Any]] = {}
+
 
 class OpenHandsAdapterError(RuntimeError):
     """Raised when the OpenHands adapter cannot create or control a conversation."""
+
+
+def _register_capped_terminal_tool(sdk: dict[str, Any]) -> None:
+    """Register a TerminalTool that caps model-provided command timeouts."""
+    terminal_tool_class = sdk["TerminalTool"]
+    register_tool = sdk.get("register_tool")
+    if not callable(register_tool):
+        # Lightweight SDK fakes can omit OpenHands' global registry. The real
+        # SDK loaded by _load_sdk always provides it.
+        return
+
+    with _TERMINAL_TOOL_REGISTRATION_LOCK:
+        capped_tool_class = _CAPPED_TERMINAL_TOOL_CLASSES.get(terminal_tool_class)
+        if capped_tool_class is None:
+
+            class CappedTerminalTool(terminal_tool_class):
+                name = terminal_tool_class.name
+
+                def __call__(
+                    self,
+                    action: Any,
+                    conversation: Any = None,
+                ) -> Any:
+                    requested_timeout = getattr(action, "timeout", None)
+                    if (
+                        requested_timeout is not None
+                        and requested_timeout > MAX_TERMINAL_TIMEOUT_SECONDS
+                    ):
+                        logger.warning(
+                            "Clamping requested terminal timeout from %s to %s seconds",
+                            requested_timeout,
+                            MAX_TERMINAL_TIMEOUT_SECONDS,
+                        )
+                        action = action.model_copy(
+                            update={"timeout": MAX_TERMINAL_TIMEOUT_SECONDS}
+                        )
+                    return super().__call__(action, conversation)
+
+            capped_tool_class = CappedTerminalTool
+            register_tool(terminal_tool_class.name, capped_tool_class)
+            _CAPPED_TERMINAL_TOOL_CLASSES[terminal_tool_class] = capped_tool_class
 
 
 class ConversationLike(Protocol):
@@ -127,6 +176,7 @@ class OpenHandsExecutorFactory:
     ) -> OpenHandsConversationAdapter:
         """Create a new conversation or resume an existing one."""
         sdk = self._load_sdk()
+        _register_capped_terminal_tool(sdk)
         workspace = Path(workspace_path)
         if not workspace.is_dir():
             raise OpenHandsAdapterError(
@@ -155,6 +205,14 @@ class OpenHandsExecutorFactory:
         llm = sdk["LLM"](**llm_kwargs)
         agent = sdk["Agent"](
             llm=llm,
+            persona=(
+                "You are the coding Executor for an autonomous software "
+                "development runtime. When executing terminal commands, NEVER "
+                "set a timeout larger than 300 seconds (5 minutes). For "
+                "long-running tasks, run them in the background and redirect "
+                "the output to a log file. Always ensure commands are strictly "
+                "non-interactive (e.g., use GIT_TERMINAL_PROMPT=0)."
+            ),
             tools=[
                 sdk["Tool"](name=sdk["TerminalTool"].name),
                 sdk["Tool"](name=sdk["FileEditorTool"].name),
@@ -231,6 +289,7 @@ class OpenHandsExecutorFactory:
                 LLMProfileStore,
                 Tool,
             )
+            from openhands.sdk.tool.registry import register_tool
             from openhands.tools.file_editor import FileEditorTool
             from openhands.tools.terminal import TerminalTool
         except ImportError as exc:
@@ -248,4 +307,5 @@ class OpenHandsExecutorFactory:
             "Tool": Tool,
             "FileEditorTool": FileEditorTool,
             "TerminalTool": TerminalTool,
+            "register_tool": register_tool,
         }
